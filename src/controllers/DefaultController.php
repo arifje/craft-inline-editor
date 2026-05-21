@@ -31,8 +31,8 @@ class DefaultController extends Controller
         $this->requirePostRequest();
         $this->requireAcceptsJson();
 
-        if (!Craft::$app->getUser()->getIsAdmin()) {
-            throw new ForbiddenHttpException('Inline editing is restricted to administrators.');
+        if (!Plugin::getInstance()->canCurrentUserEdit()) {
+            throw new ForbiddenHttpException('You do not have permission to use the inline editor.');
         }
 
         $request = Craft::$app->getRequest();
@@ -110,7 +110,7 @@ class DefaultController extends Controller
     {
         $this->requireAcceptsJson();
 
-        if (!Craft::$app->getUser()->getIsAdmin()) {
+        if (!Plugin::getInstance()->canCurrentUserEdit()) {
             throw new ForbiddenHttpException();
         }
 

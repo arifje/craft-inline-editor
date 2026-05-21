@@ -1,0 +1,22 @@
+{% import "_includes/forms.twig" as forms %}
+
+{% set groupOptions = [] %}
+{% for group in userGroups %}
+    {% set groupOptions = groupOptions | merge([{
+        label: group.name,
+        value: group.id
+    }]) %}
+{% endfor %}
+
+{% if groupOptions is empty %}
+    <p class="light">{{ 'No user groups found. Create a group in Users → User Groups first.' | t('inline-editor') }}</p>
+{% else %}
+    {{ forms.checkboxGroupField({
+        label: 'Allowed User Groups' | t('inline-editor'),
+        instructions: 'Members of these groups can use the inline editor on the frontend. Administrators always have access.' | t('inline-editor'),
+        id: 'allowedGroupIds',
+        name: 'allowedGroupIds',
+        options: groupOptions,
+        values: settings.allowedGroupIds
+    }) }}
+{% endif %}

@@ -267,7 +267,7 @@ class Editor extends Component
         if (!$request->getIsSiteRequest() || $request->getIsConsoleRequest()) {
             return false;
         }
-        return Craft::$app->getUser()->getIsAdmin();
+        return \arifje\inlineeditor\Plugin::getInstance()->canCurrentUserEdit();
     }
 
     private function looksMultiline(mixed $value): bool
