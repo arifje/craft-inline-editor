@@ -213,9 +213,9 @@
         this.tagsTextInput = textInput;
         this.tagsDropdown = dropdown;
 
-        this.renderTagChips();
         wrap.appendChild(textInput);
         wrap.appendChild(dropdown);
+        this.renderTagChips();
 
         wrap.addEventListener('click', function (e) {
             if (e.target === wrap) { textInput.focus(); }
