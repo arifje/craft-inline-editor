@@ -28,6 +28,7 @@ class EditorAsset extends AssetBundle
 
         $config = [
             'saveUrl' => UrlHelper::actionUrl('inline-editor/default/save'),
+            'searchTagsUrl' => UrlHelper::actionUrl('inline-editor/default/search-tags'),
             'csrfTokenName' => Craft::$app->getConfig()->getGeneral()->csrfTokenName,
             'csrfToken' => Craft::$app->getRequest()->getCsrfToken(),
             'ckeditorCdn' => 'https://cdn.ckeditor.com/ckeditor5/41.4.2/classic/ckeditor.js',

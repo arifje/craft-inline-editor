@@ -157,3 +157,117 @@
     0%   { background-color: rgba(34, 197, 94, 0.25); }
     100% { background-color: transparent; }
 }
+
+/* ── Tags ─────────────────────────────────────────────────────────────────── */
+
+.inline-editor__tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    background: #e2e8f0;
+    color: #0f172a;
+    font-size: 0.85em;
+    line-height: 1.5;
+    white-space: nowrap;
+    margin: 2px 3px 2px 0;
+}
+
+/* In edit mode the tag gets a remove button */
+.inline-editor__tag--removable .inline-editor__tag-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border: none;
+    background: none;
+    padding: 0;
+    cursor: pointer;
+    color: #64748b;
+    border-radius: 50%;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.inline-editor__tag--removable .inline-editor__tag-remove:hover {
+    color: #b91c1c;
+    background: rgba(185, 28, 28, 0.1);
+}
+
+.inline-editor__tags-input-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-height: 36px;
+    padding: 4px 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    cursor: text;
+    position: relative;
+}
+
+.inline-editor__tags-input-wrap:focus-within {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+}
+
+.inline-editor__tags-text {
+    flex: 1;
+    min-width: 80px;
+    border: none;
+    outline: none;
+    padding: 2px 2px;
+    font: inherit;
+    font-size: 0.9em;
+    background: transparent;
+}
+
+.inline-editor__tags-dropdown {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    right: 0;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 10000;
+    list-style: none;
+    margin: 0;
+    padding: 4px 0;
+}
+
+.inline-editor__tags-dropdown li {
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 0.9em;
+}
+
+.inline-editor__tags-dropdown li:hover,
+.inline-editor__tags-dropdown li.is-active {
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.inline-editor__tags-dropdown li.is-create {
+    color: #059669;
+    font-style: italic;
+}
+
+.inline-editor__tags-dropdown li.is-create:hover,
+.inline-editor__tags-dropdown li.is-create.is-active {
+    background: #ecfdf5;
+    color: #047857;
+}
+
+.inline-editor__tags-dropdown li.is-empty {
+    color: #94a3b8;
+    cursor: default;
+    pointer-events: none;
+}

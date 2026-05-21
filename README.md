@@ -10,6 +10,7 @@ Supported field types out of the box:
 - **Plain Text** (`craft\fields\PlainText`) — input or textarea, auto-detected
 - **URL** (`craft\fields\Url`) — `type="url"` input
 - **CKEditor** (`craft\ckeditor\Field`) — full CKEditor 5 editor, lazy-loaded from CDN
+- **Tags** (`craft\fields\Tags`) — chip-based editor with autocomplete search and new-tag creation
 
 ## Installation
 
@@ -39,6 +40,9 @@ Wherever you would render a field on the front-end, swap the value for the `inli
 
 {# CKEditor field — renders inside a <div> by default #}
 {{ inlineEditable(entry, 'body') }}
+
+{# Tags field — renders as chips, click to open chip editor with autocomplete #}
+{{ inlineEditable(entry, 'tags') }}
 ```
 
 For anonymous visitors (and non-admin users) the function falls through to a plain, properly HTML-encoded value — there's no edit icon, no extra markup, and no JavaScript loaded.
@@ -49,19 +53,37 @@ The third argument is a map of options:
 
 | Option        | Default              | Description                                                                                  |
 |---------------|----------------------|----------------------------------------------------------------------------------------------|
-| `tag`         | `span` / `div`*      | HTML tag used for the wrapper. CKEditor fields default to `div`; everything else to `span`. |
+| `tag`         | `span` / `div`*      | HTML tag used for the wrapper. CKEditor and Tags fields default to `div`; everything else to `span`. |
 | `class`       | `''`                 | Extra CSS class names appended to the wrapper.                                              |
 | `attributes`  | `{}`                 | Extra attributes, e.g. `{ id: 'main-title' }`.                                              |
 | `inputType`   | auto                 | For plain text fields, force `'input'` or `'textarea'`. Auto-detected from value otherwise. |
 | `placeholder` | `''`                 | Empty-state placeholder shown when the field has no value.                                  |
+
+### Tags editor interaction
+
+When the admin clicks the edit icon on a Tags field:
+
+- Existing tags appear as chips with a **×** remove button.
+- Typing in the input searches existing tags in the group (debounced autocomplete).
+- Select a result to add it, or choose **Create "…"** to create a brand-new tag on save.
+- **Backspace** on an empty input removes the last chip.
+- Arrow keys navigate the dropdown; **Enter** confirms the highlighted item or adds the typed text.
 
 ### JavaScript events
 
 The wrapper element dispatches `inline-editor:save` and `inline-editor:cancel` custom events when the user finishes an edit. They bubble, and `event.detail.editor` holds the editor instance.
 
 ```js
+// Plain text / URL / CKEditor / title fields
 document.addEventListener('inline-editor:save', (e) => {
     console.log('saved', e.detail.editor.field, e.detail.value);
+});
+
+// Tags field
+document.addEventListener('inline-editor:save', (e) => {
+    if (e.detail.editor.type === 'tags') {
+        console.log('tags saved', e.detail.tags); // [{id, title}, …]
+    }
 });
 ```
 

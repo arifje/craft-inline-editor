@@ -21,22 +21,15 @@
     }
 
     function loadCKEditor() {
-        if (window.ClassicEditor) {
-            return Promise.resolve(window.ClassicEditor);
-        }
-        if (ckeditorPromise) {
-            return ckeditorPromise;
-        }
+        if (window.ClassicEditor) { return Promise.resolve(window.ClassicEditor); }
+        if (ckeditorPromise) { return ckeditorPromise; }
         ckeditorPromise = new Promise(function (resolve, reject) {
             var script = document.createElement('script');
             script.src = config.ckeditorCdn;
             script.async = true;
             script.onload = function () {
-                if (window.ClassicEditor) {
-                    resolve(window.ClassicEditor);
-                } else {
-                    reject(new Error('CKEditor loaded but ClassicEditor not found'));
-                }
+                if (window.ClassicEditor) { resolve(window.ClassicEditor); }
+                else { reject(new Error('CKEditor loaded but ClassicEditor not found')); }
             };
             script.onerror = function () { reject(new Error('Failed to load CKEditor from ' + config.ckeditorCdn)); };
             document.head.appendChild(script);
@@ -54,16 +47,28 @@
         return btn;
     }
 
+    // ── Constructor ────────────────────────────────────────────────────────────
+
     function Editor(el) {
         this.el = el;
         this.elementId = el.getAttribute('data-element-id');
         this.siteId = el.getAttribute('data-site-id');
         this.field = el.getAttribute('data-field');
         this.type = el.getAttribute('data-type');
+        this.groupId = el.getAttribute('data-group-id') || null;
         this.inputType = el.getAttribute('data-input') || 'input';
         this.placeholder = el.getAttribute('data-placeholder') || '';
+
         this.originalHtml = null;
+        this.originalTagsData = null;
+        this.selectedTags = [];
+
         this.ckeditorInstance = null;
+        this.tagsWrap = null;
+        this.tagsTextInput = null;
+        this.tagsDropdown = null;
+        this._searchTimeout = null;
+
         this.editing = false;
 
         this.trigger = createTrigger();
@@ -71,18 +76,7 @@
         this.el.appendChild(this.trigger);
     }
 
-    Editor.prototype.currentValue = function () {
-        if (this.type === 'ckeditor') {
-            return this.el.innerHTML;
-        }
-        // Strip the trigger button to read the raw text.
-        var clone = this.el.cloneNode(true);
-        var trig = clone.querySelector('.inline-editor__trigger');
-        if (trig) { trig.remove(); }
-        var placeholder = clone.querySelector('.inline-editor__placeholder');
-        if (placeholder) { placeholder.remove(); }
-        return clone.textContent.replace(/^\s+|\s+$/g, '');
-    };
+    // ── Edit start ─────────────────────────────────────────────────────────────
 
     Editor.prototype.start = function (e) {
         if (e) { e.preventDefault(); e.stopPropagation(); }
@@ -92,7 +86,14 @@
         this.originalHtml = this.el.innerHTML;
         this.el.classList.add('is-editing');
 
-        var initialValue = this.currentValue();
+        var initialValue;
+        if (this.type === 'tags') {
+            this.originalTagsData = this.el.getAttribute('data-tags') || '[]';
+            try { initialValue = JSON.parse(this.originalTagsData); } catch (_) { initialValue = []; }
+        } else {
+            initialValue = this.currentValue();
+        }
+
         this.el.innerHTML = '';
 
         var form = document.createElement('div');
@@ -133,19 +134,32 @@
         saveBtn.addEventListener('click', this.save.bind(this));
         cancelBtn.addEventListener('click', this.cancel.bind(this));
 
-        // Keyboard shortcuts: Esc cancels, Cmd/Ctrl+Enter saves on textareas,
-        // Enter saves on single-line inputs.
-        input.addEventListener('keydown', this.onKeydown.bind(this));
-
         if (this.type === 'ckeditor') {
             this.mountCKEditor(initialValue);
+        } else if (this.type === 'tags') {
+            // keydown is handled inside buildTagsInput; focus the text input
+            var self = this;
+            setTimeout(function () { if (self.tagsTextInput) { self.tagsTextInput.focus(); } }, 0);
         } else {
+            input.addEventListener('keydown', this.onKeydown.bind(this));
             input.focus();
             if (typeof input.select === 'function') { input.select(); }
         }
     };
 
+    // ── Input builders ─────────────────────────────────────────────────────────
+
+    Editor.prototype.currentValue = function () {
+        var clone = this.el.cloneNode(true);
+        var trig = clone.querySelector('.inline-editor__trigger');
+        if (trig) { trig.remove(); }
+        var ph = clone.querySelector('.inline-editor__placeholder');
+        if (ph) { ph.remove(); }
+        return clone.textContent.replace(/^\s+|\s+$/g, '');
+    };
+
     Editor.prototype.buildInput = function (value) {
+        if (this.type === 'tags') { return this.buildTagsInput(value); }
         if (this.type === 'ckeditor') {
             var holder = document.createElement('div');
             holder.className = 'inline-editor__ckeditor';
@@ -175,11 +189,265 @@
         return inp;
     };
 
+    // ── Tags editor ────────────────────────────────────────────────────────────
+
+    Editor.prototype.buildTagsInput = function (tags) {
+        var self = this;
+        this.selectedTags = tags.map(function (t) { return { id: t.id, title: t.title, isNew: false }; });
+
+        var wrap = document.createElement('div');
+        wrap.className = 'inline-editor__tags-input-wrap';
+        wrap.style.position = 'relative';
+
+        var textInput = document.createElement('input');
+        textInput.type = 'text';
+        textInput.className = 'inline-editor__tags-text';
+        textInput.placeholder = 'Add tag…';
+        textInput.setAttribute('autocomplete', 'off');
+
+        var dropdown = document.createElement('ul');
+        dropdown.className = 'inline-editor__tags-dropdown';
+        dropdown.hidden = true;
+
+        this.tagsWrap = wrap;
+        this.tagsTextInput = textInput;
+        this.tagsDropdown = dropdown;
+
+        this.renderTagChips();
+        wrap.appendChild(textInput);
+        wrap.appendChild(dropdown);
+
+        wrap.addEventListener('click', function (e) {
+            if (e.target === wrap) { textInput.focus(); }
+        });
+
+        textInput.addEventListener('input', function () {
+            clearTimeout(self._searchTimeout);
+            self._searchTimeout = setTimeout(function () {
+                self.searchTags(textInput.value.trim());
+            }, 250);
+        });
+
+        textInput.addEventListener('focus', function () {
+            if (textInput.value === '') {
+                self.searchTags('');
+            }
+        });
+
+        textInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                if (!dropdown.hidden) {
+                    e.stopPropagation();
+                    self.hideDropdown();
+                }
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                var active = dropdown.querySelector('li.is-active');
+                if (active && !dropdown.hidden) {
+                    active.click();
+                    return;
+                }
+                var text = textInput.value.trim();
+                if (text) {
+                    self.addTag({ id: null, title: text, isNew: true });
+                    textInput.value = '';
+                    self.hideDropdown();
+                }
+                return;
+            }
+            if (e.key === 'Backspace' && textInput.value === '') {
+                e.preventDefault();
+                self.removeLastTag();
+                return;
+            }
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                self.moveDropdownActive(1);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                self.moveDropdownActive(-1);
+                return;
+            }
+        });
+
+        // Hide dropdown when focus leaves the wrap entirely.
+        wrap.addEventListener('focusout', function (e) {
+            if (!wrap.contains(e.relatedTarget)) {
+                setTimeout(function () { self.hideDropdown(); }, 150);
+            }
+        });
+
+        return wrap;
+    };
+
+    Editor.prototype.addTag = function (tag) {
+        var lc = tag.title.toLowerCase();
+        var exists = this.selectedTags.some(function (t) {
+            return (tag.id !== null && t.id === tag.id) || t.title.toLowerCase() === lc;
+        });
+        if (exists) { return; }
+        this.selectedTags.push(tag);
+        this.renderTagChips();
+    };
+
+    Editor.prototype.removeTag = function (index) {
+        this.selectedTags.splice(index, 1);
+        this.renderTagChips();
+    };
+
+    Editor.prototype.removeLastTag = function () {
+        if (this.selectedTags.length > 0) {
+            this.selectedTags.pop();
+            this.renderTagChips();
+        }
+    };
+
+    Editor.prototype.renderTagChips = function () {
+        var self = this;
+        var wrap = this.tagsWrap;
+        // Remove existing chips, keep text input and dropdown.
+        wrap.querySelectorAll('.inline-editor__tag--removable').forEach(function (c) { c.remove(); });
+
+        this.selectedTags.forEach(function (tag, index) {
+            var chip = document.createElement('span');
+            chip.className = 'inline-editor__tag inline-editor__tag--removable';
+            chip.appendChild(document.createTextNode(tag.title + ' '));
+
+            var removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'inline-editor__tag-remove';
+            removeBtn.setAttribute('aria-label', 'Remove ' + tag.title);
+            removeBtn.textContent = '×';
+            removeBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                self.removeTag(index);
+                if (self.tagsTextInput) { self.tagsTextInput.focus(); }
+            });
+
+            chip.appendChild(removeBtn);
+            wrap.insertBefore(chip, self.tagsTextInput);
+        });
+    };
+
+    Editor.prototype.searchTags = function (query) {
+        var self = this;
+        if (!this.groupId || !config.searchTagsUrl) { return; }
+
+        var url = config.searchTagsUrl
+            + '?groupId=' + encodeURIComponent(this.groupId)
+            + '&siteId=' + encodeURIComponent(this.siteId)
+            + '&search=' + encodeURIComponent(query);
+
+        fetch(url, {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        }).then(function (res) {
+            return res.json();
+        }).then(function (data) {
+            if (data && Array.isArray(data.tags)) {
+                self.showDropdown(data.tags, query);
+            }
+        }).catch(function () { /* silently ignore search errors */ });
+    };
+
+    Editor.prototype.showDropdown = function (results, query) {
+        var self = this;
+        var dropdown = this.tagsDropdown;
+        dropdown.innerHTML = '';
+
+        var selectedIds = this.selectedTags.filter(function (t) { return t.id !== null; }).map(function (t) { return t.id; });
+        var selectedTitles = this.selectedTags.map(function (t) { return t.title.toLowerCase(); });
+
+        var filtered = results.filter(function (t) {
+            return selectedIds.indexOf(t.id) === -1 && selectedTitles.indexOf(t.title.toLowerCase()) === -1;
+        });
+
+        filtered.forEach(function (tag) {
+            var li = document.createElement('li');
+            li.textContent = tag.title;
+            li.setAttribute('data-id', tag.id);
+            li.addEventListener('mousedown', function (e) { e.preventDefault(); }); // prevent blur before click
+            li.addEventListener('click', function () {
+                self.addTag({ id: tag.id, title: tag.title, isNew: false });
+                self.tagsTextInput.value = '';
+                self.hideDropdown();
+                self.tagsTextInput.focus();
+            });
+            dropdown.appendChild(li);
+        });
+
+        if (query) {
+            var lq = query.toLowerCase();
+            var exactInResults = results.some(function (t) { return t.title.toLowerCase() === lq; });
+            var exactInSelected = selectedTitles.indexOf(lq) !== -1;
+
+            if (!exactInResults && !exactInSelected) {
+                var createLi = document.createElement('li');
+                createLi.className = 'is-create';
+                createLi.textContent = 'Create "' + query + '"';
+                createLi.addEventListener('mousedown', function (e) { e.preventDefault(); });
+                createLi.addEventListener('click', function () {
+                    self.addTag({ id: null, title: query, isNew: true });
+                    self.tagsTextInput.value = '';
+                    self.hideDropdown();
+                    self.tagsTextInput.focus();
+                });
+                dropdown.appendChild(createLi);
+            }
+        }
+
+        if (dropdown.children.length === 0) {
+            if (query) {
+                var emptyLi = document.createElement('li');
+                emptyLi.className = 'is-empty';
+                emptyLi.textContent = 'No tags found';
+                dropdown.appendChild(emptyLi);
+            } else {
+                dropdown.hidden = true;
+                return;
+            }
+        }
+
+        dropdown.hidden = false;
+    };
+
+    Editor.prototype.hideDropdown = function () {
+        if (this.tagsDropdown) {
+            this.tagsDropdown.hidden = true;
+            this.tagsDropdown.innerHTML = '';
+        }
+    };
+
+    Editor.prototype.moveDropdownActive = function (dir) {
+        var dropdown = this.tagsDropdown;
+        if (dropdown.hidden) {
+            this.searchTags(this.tagsTextInput ? this.tagsTextInput.value.trim() : '');
+            return;
+        }
+        var items = Array.from(dropdown.querySelectorAll('li:not(.is-empty)'));
+        var current = dropdown.querySelector('li.is-active');
+        var idx = current ? items.indexOf(current) : -1;
+        if (current) { current.classList.remove('is-active'); }
+        var next = idx + dir;
+        if (next < 0) { next = items.length - 1; }
+        if (next >= items.length) { next = 0; }
+        if (items[next]) {
+            items[next].classList.add('is-active');
+            items[next].scrollIntoView({ block: 'nearest' });
+        }
+    };
+
+    // ── CKEditor ───────────────────────────────────────────────────────────────
+
     Editor.prototype.mountCKEditor = function (value) {
         var self = this;
         loadCKEditor().then(function (ClassicEditor) {
             return ClassicEditor.create(self.formInput, {
-                // Minimal but practical toolbar that mirrors common Craft CKEditor configs.
                 toolbar: ['bold', 'italic', 'link', 'bulletedList', 'numberedList', '|', 'undo', 'redo']
             });
         }).then(function (instance) {
@@ -191,20 +459,24 @@
         });
     };
 
-    Editor.prototype.onKeydown = function (e) {
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            this.cancel();
-            return;
-        }
-        if (e.key === 'Enter') {
-            var isTextarea = e.target && e.target.tagName === 'TEXTAREA';
-            if (!isTextarea || e.metaKey || e.ctrlKey) {
-                e.preventDefault();
-                this.save();
-            }
+    Editor.prototype.teardownCKEditor = function () {
+        if (this.ckeditorInstance) {
+            try { this.ckeditorInstance.destroy(); } catch (_) {}
+            this.ckeditorInstance = null;
         }
     };
+
+    // ── Keyboard (non-tags fields) ─────────────────────────────────────────────
+
+    Editor.prototype.onKeydown = function (e) {
+        if (e.key === 'Escape') { e.preventDefault(); this.cancel(); return; }
+        if (e.key === 'Enter') {
+            var isTextarea = e.target && e.target.tagName === 'TEXTAREA';
+            if (!isTextarea || e.metaKey || e.ctrlKey) { e.preventDefault(); this.save(); }
+        }
+    };
+
+    // ── Read value ─────────────────────────────────────────────────────────────
 
     Editor.prototype.readValue = function () {
         if (this.type === 'ckeditor' && this.ckeditorInstance) {
@@ -213,9 +485,10 @@
         return this.formInput && 'value' in this.formInput ? this.formInput.value : '';
     };
 
+    // ── Save ───────────────────────────────────────────────────────────────────
+
     Editor.prototype.save = function () {
         var self = this;
-        var value = this.readValue();
         this.setBusy(true);
         this.showError(null);
 
@@ -223,7 +496,19 @@
         body.append('elementId', this.elementId);
         body.append('siteId', this.siteId);
         body.append('field', this.field);
-        body.append('value', value);
+
+        if (this.type === 'tags') {
+            this.selectedTags.forEach(function (tag) {
+                if (!tag.isNew && tag.id !== null) {
+                    body.append('tagIds[]', tag.id);
+                } else {
+                    body.append('newTags[]', tag.title);
+                }
+            });
+        } else {
+            body.append('value', this.readValue());
+        }
+
         if (config.csrfTokenName && config.csrfToken) {
             body.append(config.csrfTokenName, config.csrfToken);
         }
@@ -247,17 +532,22 @@
                 self.setBusy(false);
                 return;
             }
-            self.finish(result.body.value);
+            if (self.type === 'tags') {
+                self.finishTags(result.body.tags || []);
+            } else {
+                self.finish(result.body.value);
+            }
         }).catch(function (err) {
             self.showError(err && err.message ? err.message : 'Save failed');
             self.setBusy(false);
         });
     };
 
+    // ── Finish (plain fields) ──────────────────────────────────────────────────
+
     Editor.prototype.finish = function (savedValue) {
         this.teardownCKEditor();
-        this.el.classList.remove('is-editing');
-        this.el.classList.remove('is-saving');
+        this.el.classList.remove('is-editing', 'is-saving');
         this.el.innerHTML = '';
 
         if (savedValue === '' || savedValue == null) {
@@ -274,36 +564,78 @@
         }
 
         this.el.appendChild(this.trigger);
-        this.el.classList.add('is-saved-flash');
-        var self = this;
-        setTimeout(function () { self.el.classList.remove('is-saved-flash'); }, 700);
+        this._flashSaved();
 
         this.editing = false;
         this.originalHtml = null;
         this.dispatch('save', { value: savedValue });
     };
 
-    Editor.prototype.cancel = function () {
-        this.teardownCKEditor();
-        this.el.classList.remove('is-editing');
-        this.el.innerHTML = this.originalHtml || '';
-        // Re-attach trigger (it was part of originalHtml but its listener was lost).
-        var existingTrigger = this.el.querySelector('.inline-editor__trigger');
-        if (existingTrigger) {
-            existingTrigger.replaceWith(this.trigger);
-        } else {
-            this.el.appendChild(this.trigger);
-        }
+    // ── Finish (tags) ──────────────────────────────────────────────────────────
+
+    Editor.prototype.finishTags = function (tags) {
+        var self = this;
+        this.el.classList.remove('is-editing', 'is-saving');
+        this.el.innerHTML = '';
+
+        // Update data-tags so the next edit starts from the correct state.
+        this.el.setAttribute('data-tags', JSON.stringify(tags));
+
+        tags.forEach(function (tag) {
+            var chip = document.createElement('span');
+            chip.className = 'inline-editor__tag';
+            chip.textContent = tag.title;
+            self.el.appendChild(chip);
+        });
+
+        this.el.appendChild(this.trigger);
+        this._flashSaved();
+
         this.editing = false;
         this.originalHtml = null;
+        this.originalTagsData = null;
+        this.selectedTags = [];
+        this.tagsWrap = null;
+        this.tagsTextInput = null;
+        this.tagsDropdown = null;
+        this.dispatch('save', { tags: tags });
+    };
+
+    // ── Cancel ─────────────────────────────────────────────────────────────────
+
+    Editor.prototype.cancel = function () {
+        this.teardownCKEditor();
+        clearTimeout(this._searchTimeout);
+
+        this.el.classList.remove('is-editing');
+        this.el.innerHTML = this.originalHtml || '';
+
+        // Restore data-tags if this was a tags edit.
+        if (this.type === 'tags' && this.originalTagsData !== null) {
+            this.el.setAttribute('data-tags', this.originalTagsData);
+        }
+
+        // Re-attach the live trigger element (the serialised HTML has a dead copy).
+        var deadTrigger = this.el.querySelector('.inline-editor__trigger');
+        if (deadTrigger) { deadTrigger.replaceWith(this.trigger); }
+        else { this.el.appendChild(this.trigger); }
+
+        this.editing = false;
+        this.originalHtml = null;
+        this.originalTagsData = null;
+        this.selectedTags = [];
+        this.tagsWrap = null;
+        this.tagsTextInput = null;
+        this.tagsDropdown = null;
         this.dispatch('cancel');
     };
 
-    Editor.prototype.teardownCKEditor = function () {
-        if (this.ckeditorInstance) {
-            try { this.ckeditorInstance.destroy(); } catch (e) { /* ignore */ }
-            this.ckeditorInstance = null;
-        }
+    // ── Helpers ────────────────────────────────────────────────────────────────
+
+    Editor.prototype._flashSaved = function () {
+        var self = this;
+        this.el.classList.add('is-saved-flash');
+        setTimeout(function () { self.el.classList.remove('is-saved-flash'); }, 700);
     };
 
     Editor.prototype.setBusy = function (busy) {
@@ -320,22 +652,16 @@
 
     Editor.prototype.showError = function (message) {
         if (!this.errorEl) { return; }
-        if (!message) {
-            this.errorEl.hidden = true;
-            this.errorEl.textContent = '';
-            return;
-        }
-        this.errorEl.hidden = false;
-        this.errorEl.textContent = message;
+        this.errorEl.hidden = !message;
+        this.errorEl.textContent = message || '';
     };
 
     Editor.prototype.dispatch = function (name, detail) {
-        var event = new CustomEvent('inline-editor:' + name, {
+        this.el.dispatchEvent(new CustomEvent('inline-editor:' + name, {
             bubbles: true,
             cancelable: false,
             detail: Object.assign({ editor: this }, detail || {})
-        });
-        this.el.dispatchEvent(event);
+        }));
     };
 
     function formatErrors(errors) {
@@ -348,6 +674,8 @@
         return lines.length ? lines.join(' ') : null;
     }
 
+    // ── Init ───────────────────────────────────────────────────────────────────
+
     function initAll(root) {
         var nodes = (root || document).querySelectorAll('[data-inline-editor]:not([data-inline-editor-ready])');
         for (var i = 0; i < nodes.length; i++) {
@@ -358,10 +686,7 @@
         }
     }
 
-    // Expose a tiny API so host pages can re-scan after dynamic content insertion.
-    window.InlineEditor = {
-        init: initAll
-    };
+    window.InlineEditor = { init: initAll };
 
     ready(function () { initAll(document); });
 })();

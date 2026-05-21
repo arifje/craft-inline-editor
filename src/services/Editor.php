@@ -6,7 +6,9 @@ use Craft;
 use craft\base\Component;
 use craft\base\ElementInterface;
 use craft\base\Field;
+use craft\elements\Tag;
 use craft\fields\PlainText;
+use craft\fields\Tags;
 use craft\fields\Url;
 use yii\base\InvalidArgumentException;
 
@@ -20,6 +22,7 @@ class Editor extends Component
     public const TYPE_PLAINTEXT = 'plaintext';
     public const TYPE_URL = 'url';
     public const TYPE_CKEDITOR = 'ckeditor';
+    public const TYPE_TAGS = 'tags';
 
     /**
      * Render the wrapper HTML for an editable field.
@@ -31,7 +34,7 @@ class Editor extends Component
      * @param ElementInterface $element The element being rendered.
      * @param string $handle Field handle, or "title" for the element title.
      * @param array $options
-     *   - tag:         HTML tag to wrap with (default: span / div for ckeditor)
+     *   - tag:         HTML tag to wrap with (default: span / div for ckeditor+tags)
      *   - class:       Extra CSS class names
      *   - attributes:  Extra attributes (key => value)
      *   - inputType:   Override input type for plaintext (input|textarea)
@@ -40,14 +43,14 @@ class Editor extends Component
     public function render(ElementInterface $element, string $handle, array $options = []): string
     {
         $type = $this->detectType($element, $handle);
-        $rawValue = $this->getRawValue($element, $handle);
-        $displayValue = $this->getDisplayValue($element, $handle, $type, $rawValue);
+        $rawValue = $this->getRawValue($element, $handle, $type);
+        $displayValue = $this->getDisplayValue($type, $rawValue);
 
         if (!$this->isEditable($element)) {
             return $displayValue;
         }
 
-        $defaultTag = $type === self::TYPE_CKEDITOR ? 'div' : 'span';
+        $defaultTag = in_array($type, [self::TYPE_CKEDITOR, self::TYPE_TAGS], true) ? 'div' : 'span';
         $tag = $options['tag'] ?? $defaultTag;
         $extraClass = $options['class'] ?? '';
         $extraAttributes = $options['attributes'] ?? [];
@@ -69,6 +72,14 @@ class Editor extends Component
             $attrs['data-placeholder'] = $placeholder;
         }
 
+        if ($type === self::TYPE_TAGS) {
+            $attrs['data-tags'] = json_encode($rawValue, JSON_UNESCAPED_UNICODE);
+            $field = $this->getField($element, $handle);
+            if ($field instanceof Tags && $field->groupId !== null) {
+                $attrs['data-group-id'] = (string)(int)$field->groupId;
+            }
+        }
+
         foreach ($extraAttributes as $name => $value) {
             $attrs[$name] = $value;
         }
@@ -80,14 +91,11 @@ class Editor extends Component
     }
 
     /**
-     * Persist a new value for an element field.
-     *
-     * @throws InvalidArgumentException If the field is not editable inline.
+     * Persist a plain-text / URL / CKEditor field value.
      */
     public function save(ElementInterface $element, string $handle, mixed $value): bool
     {
         $type = $this->detectType($element, $handle);
-
         $sanitized = $this->sanitize($value, $type);
 
         if ($handle === 'title') {
@@ -97,6 +105,62 @@ class Editor extends Component
         }
 
         return Craft::$app->getElements()->saveElement($element);
+    }
+
+    /**
+     * Persist tag relations. Creates new tags on the fly when titles are supplied.
+     *
+     * @param int[]    $tagIds       IDs of existing tags to keep.
+     * @param string[] $newTagTitles Titles of brand-new tags to create.
+     * @return array{saved: bool, tags: array<array{id:int,title:string}>}
+     */
+    public function saveTags(ElementInterface $element, string $handle, array $tagIds, array $newTagTitles): array
+    {
+        $field = $this->getField($element, $handle);
+        if (!($field instanceof Tags)) {
+            throw new InvalidArgumentException("Field \"{$handle}\" is not a Tags field.");
+        }
+
+        foreach ($newTagTitles as $title) {
+            $title = trim($title);
+            if ($title === '') {
+                continue;
+            }
+            $tag = $this->createTag($field, $title, $element->siteId);
+            if ($tag !== null) {
+                $tagIds[] = $tag->id;
+            }
+        }
+
+        $element->setFieldValue($handle, array_values(array_unique($tagIds)));
+        $saved = Craft::$app->getElements()->saveElement($element);
+
+        $tags = [];
+        if ($saved) {
+            $tagQuery = $element->getFieldValue($handle);
+            $tags = $this->tagsToArray($tagQuery->all());
+        }
+
+        return ['saved' => $saved, 'tags' => $tags];
+    }
+
+    /**
+     * Search tags within a group for the autocomplete dropdown.
+     *
+     * @return array<array{id:int,title:string}>
+     */
+    public function searchTags(int $groupId, string $query, int $siteId): array
+    {
+        $tagQuery = Tag::find()
+            ->groupId($groupId)
+            ->siteId($siteId)
+            ->limit(20);
+
+        if ($query !== '') {
+            $tagQuery->search('*' . $query . '*');
+        }
+
+        return $this->tagsToArray($tagQuery->all());
     }
 
     /**
@@ -110,6 +174,10 @@ class Editor extends Component
 
         $field = $this->getField($element, $handle);
 
+        if ($field instanceof Tags) {
+            return self::TYPE_TAGS;
+        }
+
         if ($field instanceof PlainText) {
             return self::TYPE_PLAINTEXT;
         }
@@ -120,11 +188,27 @@ class Editor extends Component
 
         // CKEditor is an optional plugin — match by class name to avoid a hard dependency.
         $class = $field !== null ? get_class($field) : '';
-        if ($class !== '' && (str_contains($class, 'ckeditor') || str_contains(strtolower($class), 'ckeditor'))) {
+        if ($class !== '' && str_contains(strtolower($class), 'ckeditor')) {
             return self::TYPE_CKEDITOR;
         }
 
         throw new InvalidArgumentException("Field \"{$handle}\" is not a supported inline-editable field type.");
+    }
+
+    private function createTag(Tags $field, string $title, int $siteId): ?Tag
+    {
+        $tag = new Tag([
+            'groupId' => (int)$field->groupId,
+            'title' => $title,
+            'siteId' => $siteId,
+        ]);
+
+        if (!Craft::$app->getElements()->saveElement($tag)) {
+            Craft::warning("Inline Editor: could not create tag \"{$title}\": " . json_encode($tag->getErrors()), __METHOD__);
+            return null;
+        }
+
+        return $tag;
     }
 
     private function getField(ElementInterface $element, string $handle): ?Field
@@ -136,23 +220,36 @@ class Editor extends Component
         return $layout->getFieldByHandle($handle);
     }
 
-    private function getRawValue(ElementInterface $element, string $handle): mixed
+    private function getRawValue(ElementInterface $element, string $handle, string $type): mixed
     {
         if ($handle === 'title') {
             return $element->title;
         }
-        return $element->getFieldValue($handle);
+
+        $value = $element->getFieldValue($handle);
+
+        if ($type === self::TYPE_TAGS) {
+            return $this->tagsToArray($value->all());
+        }
+
+        return $value;
     }
 
-    private function getDisplayValue(ElementInterface $element, string $handle, string $type, mixed $rawValue): string
+    private function getDisplayValue(string $type, mixed $rawValue): string
     {
         if ($type === self::TYPE_CKEDITOR) {
-            // CKEditor stores HTML; the field value is typically an object cast to string.
             return (string)$rawValue;
         }
 
-        $string = (string)$rawValue;
-        return htmlspecialchars($string, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        if ($type === self::TYPE_TAGS) {
+            // $rawValue is already the tagsToArray result at this point.
+            return implode('', array_map(
+                static fn(array $t) => '<span class="inline-editor__tag">' . htmlspecialchars($t['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</span>',
+                $rawValue
+            ));
+        }
+
+        return htmlspecialchars((string)$rawValue, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     private function isEditable(ElementInterface $element): bool
@@ -167,6 +264,12 @@ class Editor extends Component
     private function looksMultiline(mixed $value): bool
     {
         return is_string($value) && str_contains($value, "\n");
+    }
+
+    /** @return array<array{id:int,title:string}> */
+    private function tagsToArray(array $tags): array
+    {
+        return array_map(static fn(Tag $t) => ['id' => $t->id, 'title' => $t->title], $tags);
     }
 
     private function buildAttributes(array $attrs): string
