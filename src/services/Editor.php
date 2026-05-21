@@ -75,8 +75,11 @@ class Editor extends Component
         if ($type === self::TYPE_TAGS) {
             $attrs['data-tags'] = json_encode($rawValue, JSON_UNESCAPED_UNICODE);
             $field = $this->getField($element, $handle);
-            if ($field instanceof Tags && $field->groupId !== null) {
-                $attrs['data-group-id'] = (string)(int)$field->groupId;
+            if ($field instanceof Tags) {
+                $groupId = $this->getGroupIdFromTagsField($field);
+                if ($groupId !== null) {
+                    $attrs['data-group-id'] = (string)$groupId;
+                }
             }
         }
 
@@ -197,8 +200,14 @@ class Editor extends Component
 
     private function createTag(Tags $field, string $title, int $siteId): ?Tag
     {
+        $groupId = $this->getGroupIdFromTagsField($field);
+        if ($groupId === null) {
+            Craft::warning("Inline Editor: could not resolve group ID for Tags field \"{$field->handle}\" — tag \"{$title}\" not created.", __METHOD__);
+            return null;
+        }
+
         $tag = new Tag([
-            'groupId' => (int)$field->groupId,
+            'groupId' => $groupId,
             'title' => $title,
             'siteId' => $siteId,
         ]);
@@ -270,6 +279,32 @@ class Editor extends Component
     private function tagsToArray(array $tags): array
     {
         return array_map(static fn(Tag $t) => ['id' => $t->id, 'title' => $t->title], $tags);
+    }
+
+    /**
+     * Resolve the numeric group ID from a Tags field.
+     *
+     * Craft 4/5 stores the group as source = "taggroup:{uid}", not as a direct
+     * $groupId integer property, so we parse the source string and look up the
+     * group by its UID.
+     */
+    private function getGroupIdFromTagsField(Tags $field): ?int
+    {
+        $source = $field->source ?? '';
+
+        if (!str_starts_with($source, 'taggroup:')) {
+            return null;
+        }
+
+        $uid = substr($source, strlen('taggroup:'));
+
+        // Numeric ID (legacy Craft 3 format) — accept it directly.
+        if (ctype_digit($uid)) {
+            return (int)$uid;
+        }
+
+        $group = Craft::$app->getTags()->getTagGroupByUid($uid);
+        return $group?->id;
     }
 
     private function buildAttributes(array $attrs): string
