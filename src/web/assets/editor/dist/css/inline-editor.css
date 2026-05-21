@@ -1,0 +1,159 @@
+/* Inline Editor — frontend styles
+   Scoped under .inline-editor so we don't bleed into the host site's CSS. */
+
+.inline-editor {
+    position: relative;
+    outline: 1px dashed transparent;
+    transition: outline-color 0.15s ease;
+}
+
+.inline-editor:hover {
+    outline-color: rgba(59, 130, 246, 0.5);
+}
+
+.inline-editor.is-editing {
+    outline-color: rgba(59, 130, 246, 0.9);
+    outline-style: solid;
+}
+
+.inline-editor__trigger {
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: none;
+    background: #3b82f6;
+    color: #fff;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-size: 12px;
+    line-height: 1;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    z-index: 9999;
+}
+
+.inline-editor:hover .inline-editor__trigger,
+.inline-editor:focus-within .inline-editor__trigger {
+    display: inline-flex;
+}
+
+.inline-editor__trigger:hover {
+    background: #2563eb;
+}
+
+.inline-editor__trigger svg {
+    width: 12px;
+    height: 12px;
+    fill: currentColor;
+}
+
+.inline-editor__form {
+    display: block;
+    width: 100%;
+}
+
+.inline-editor__input,
+.inline-editor__textarea {
+    box-sizing: border-box;
+    width: 100%;
+    font: inherit;
+    color: inherit;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin: 0;
+    line-height: inherit;
+}
+
+.inline-editor__textarea {
+    min-height: 6em;
+    resize: vertical;
+}
+
+.inline-editor__input:focus,
+.inline-editor__textarea:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+}
+
+.inline-editor__ckeditor {
+    background: #fff;
+    color: #111;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    min-height: 6em;
+}
+
+.inline-editor__actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.inline-editor__btn {
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    padding: 6px 12px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    cursor: pointer;
+}
+
+.inline-editor__btn--save {
+    background: #16a34a;
+    color: #fff;
+    border-color: #16a34a;
+}
+
+.inline-editor__btn--save:hover {
+    background: #15803d;
+    border-color: #15803d;
+}
+
+.inline-editor__btn--cancel {
+    background: #f1f5f9;
+    color: #0f172a;
+    border-color: #cbd5e1;
+}
+
+.inline-editor__btn--cancel:hover {
+    background: #e2e8f0;
+}
+
+.inline-editor__btn[disabled] {
+    opacity: 0.6;
+    cursor: progress;
+}
+
+.inline-editor__error {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #b91c1c;
+}
+
+.inline-editor__placeholder {
+    color: #9ca3af;
+    font-style: italic;
+}
+
+.inline-editor.is-saving {
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+.inline-editor.is-saved-flash {
+    animation: inline-editor-saved 0.6s ease;
+}
+
+@keyframes inline-editor-saved {
+    0%   { background-color: rgba(34, 197, 94, 0.25); }
+    100% { background-color: transparent; }
+}
