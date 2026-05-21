@@ -338,12 +338,12 @@
         var self = this;
         if (!this.groupId || !config.searchTagsUrl) { return; }
 
-        var url = config.searchTagsUrl
-            + '?groupId=' + encodeURIComponent(this.groupId)
-            + '&siteId=' + encodeURIComponent(this.siteId)
-            + '&search=' + encodeURIComponent(query);
+        var url = new URL(config.searchTagsUrl, window.location.href);
+        url.searchParams.set('groupId', this.groupId);
+        url.searchParams.set('siteId', this.siteId);
+        url.searchParams.set('search', query);
 
-        fetch(url, {
+        fetch(url.toString(), {
             credentials: 'same-origin',
             headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
         }).then(function (res) {
