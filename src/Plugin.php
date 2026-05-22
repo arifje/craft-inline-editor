@@ -82,7 +82,26 @@ class Plugin extends BasePlugin
         return Craft::$app->getView()->renderTemplate('inline-editor/_settings', [
             'settings' => $this->getSettings(),
             'userGroups' => Craft::$app->getUserGroups()->getAllGroups(),
+            'purifierConfigs' => $this->getPurifierConfigOptions(),
         ]);
+    }
+
+    /**
+     * Returns select options for every .json file found in config/htmlpurifier/.
+     */
+    private function getPurifierConfigOptions(): array
+    {
+        $options = [['label' => Craft::t('inline-editor', 'None (rely on field settings)'), 'value' => '']];
+
+        $dir = Craft::$app->getPath()->getConfigPath() . DIRECTORY_SEPARATOR . 'htmlpurifier';
+        if (is_dir($dir)) {
+            foreach (glob($dir . DIRECTORY_SEPARATOR . '*.json') ?: [] as $file) {
+                $name = pathinfo($file, PATHINFO_FILENAME);
+                $options[] = ['label' => $name, 'value' => $name];
+            }
+        }
+
+        return $options;
     }
 
     private function registerCpTemplateRoot(): void

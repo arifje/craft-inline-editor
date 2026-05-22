@@ -14,10 +14,18 @@ class Settings extends Model
      */
     public array $allowedGroupIds = [];
 
+    /**
+     * Filename (without .json extension) of the HTML Purifier config to apply
+     * when saving CKEditor field content. Files live in config/htmlpurifier/.
+     * Leave empty to skip purification here and rely on Craft's own field processing.
+     */
+    public string $ckeditorPurifierConfig = '';
+
     public function defineRules(): array
     {
         return [
             ['allowedGroupIds', 'each', 'rule' => ['integer']],
+            ['ckeditorPurifierConfig', 'string'],
         ];
     }
 }

@@ -20,3 +20,14 @@
         values: settings.allowedGroupIds
     }) }}
 {% endif %}
+
+<hr>
+
+{{ forms.selectField({
+    label: 'CKEditor — HTML Purifier Config' | t('inline-editor'),
+    instructions: 'Choose which HTML Purifier config to apply when saving CKEditor content via the inline editor. Config files are JSON files located in config/htmlpurifier/. Select "None" to rely on the field\'s own Craft settings.' | t('inline-editor'),
+    id: 'ckeditorPurifierConfig',
+    name: 'ckeditorPurifierConfig',
+    options: purifierConfigs,
+    value: settings.ckeditorPurifierConfig
+}) }}

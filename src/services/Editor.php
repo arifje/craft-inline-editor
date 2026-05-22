@@ -101,6 +101,13 @@ class Editor extends Component
         $type = $this->detectType($element, $handle);
         $sanitized = $this->sanitize($value, $type);
 
+        if ($type === self::TYPE_CKEDITOR) {
+            $configName = \arifje\inlineeditor\Plugin::getInstance()->getSettings()->ckeditorPurifierConfig;
+            if ($configName !== '') {
+                $sanitized = $this->purifyHtml($sanitized, $configName);
+            }
+        }
+
         if ($handle === 'title') {
             $element->title = $sanitized;
         } else {
@@ -108,6 +115,36 @@ class Editor extends Component
         }
 
         return Craft::$app->getElements()->saveElement($element);
+    }
+
+    /**
+     * Run HTML through a purifier config file from config/htmlpurifier/.
+     */
+    private function purifyHtml(string $html, string $configFile): string
+    {
+        $path = Craft::$app->getPath()->getConfigPath()
+            . DIRECTORY_SEPARATOR . 'htmlpurifier'
+            . DIRECTORY_SEPARATOR . $configFile . '.json';
+
+        if (!is_file($path)) {
+            Craft::warning("Inline Editor: HTML Purifier config \"{$configFile}.json\" not found at {$path}.", __METHOD__);
+            return $html;
+        }
+
+        $directives = json_decode((string)file_get_contents($path), true);
+        $config = \HTMLPurifier_Config::createDefault();
+
+        if (is_array($directives)) {
+            foreach ($directives as $key => $val) {
+                try {
+                    $config->set($key, $val);
+                } catch (\Exception $e) {
+                    Craft::warning("Inline Editor: could not set HTMLPurifier directive \"{$key}\": " . $e->getMessage(), __METHOD__);
+                }
+            }
+        }
+
+        return (new \HTMLPurifier($config))->purify($html);
     }
 
     /**
