@@ -450,12 +450,59 @@
 
     // ── CKEditor ───────────────────────────────────────────────────────────────
 
+    // Base CKEditor config used when no JS config file is selected.
+    var CK_BASE_CONFIG = {
+        toolbar: ['heading', '|', 'bold', 'italic', 'link', 'bulletedList', 'numberedList', '|', 'undo', 'redo']
+    };
+
+    /**
+     * Deep-merge a Craft CKEditor JS config object (window.InlineEditorCKConfig)
+     * with our base config.
+     *
+     * Rules:
+     *  - toolbar:       craft config wins if present, otherwise use base
+     *  - extraPlugins:  concatenate both arrays
+     *  - link:          shallow-merge (craft wins per key)
+     *  - everything else at top level: craft config wins
+     */
+    function buildCKEditorConfig() {
+        var craft = window.InlineEditorCKConfig;
+        if (!craft || typeof craft !== 'object') {
+            return CK_BASE_CONFIG;
+        }
+
+        var result = {};
+
+        // toolbar
+        result.toolbar = craft.toolbar || CK_BASE_CONFIG.toolbar;
+
+        // extraPlugins — merge arrays
+        var basePlugins = CK_BASE_CONFIG.extraPlugins || [];
+        var craftPlugins = Array.isArray(craft.extraPlugins) ? craft.extraPlugins : [];
+        if (basePlugins.length || craftPlugins.length) {
+            result.extraPlugins = basePlugins.concat(craftPlugins);
+        }
+
+        // link — shallow merge so decorators are preserved
+        if (craft.link || CK_BASE_CONFIG.link) {
+            result.link = Object.assign({}, CK_BASE_CONFIG.link || {}, craft.link || {});
+        }
+
+        // all other top-level keys from the craft config
+        var handled = ['toolbar', 'extraPlugins', 'link'];
+        Object.keys(craft).forEach(function (key) {
+            if (handled.indexOf(key) === -1) {
+                result[key] = craft[key];
+            }
+        });
+
+        return result;
+    }
+
     Editor.prototype.mountCKEditor = function (value) {
         var self = this;
         loadCKEditor().then(function (ClassicEditor) {
-            return ClassicEditor.create(self.formInput, {
-                toolbar: ['bold', 'italic', 'link', 'bulletedList', 'numberedList', '|', 'undo', 'redo']
-            });
+            return ClassicEditor.create(self.formInput, buildCKEditorConfig());
         }).then(function (instance) {
             self.ckeditorInstance = instance;
             instance.setData(value);

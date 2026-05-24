@@ -2,6 +2,7 @@
 
 namespace arifje\inlineeditor\web\assets\editor;
 
+use arifje\inlineeditor\Plugin;
 use Craft;
 use craft\helpers\UrlHelper;
 use craft\web\AssetBundle;
@@ -36,5 +37,24 @@ class EditorAsset extends AssetBundle
 
         $json = json_encode($config, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         $view->registerJs("window.InlineEditorConfig = {$json};", View::POS_HEAD);
+
+        // Inline the raw CKEditor JS config source so the browser can evaluate
+        // and merge it without an extra HTTP request.
+        $configName = Plugin::getInstance()->getSettings()->ckeditorConfig;
+        if ($configName !== '') {
+            $configPath = Craft::$app->getPath()->getConfigPath()
+                . DIRECTORY_SEPARATOR . 'ckeditor'
+                . DIRECTORY_SEPARATOR . $configName . '.js';
+
+            if (is_file($configPath)) {
+                $source = file_get_contents($configPath);
+                // Wrap in a function so `return` at top level is valid, then
+                // expose the resulting object for inline-editor.js to consume.
+                $view->registerJs(
+                    "window.InlineEditorCKConfig = (function(){\n" . $source . "\n})();",
+                    View::POS_HEAD
+                );
+            }
+        }
     }
 }

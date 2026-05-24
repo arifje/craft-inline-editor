@@ -83,7 +83,26 @@ class Plugin extends BasePlugin
             'settings' => $this->getSettings(),
             'userGroups' => Craft::$app->getUserGroups()->getAllGroups(),
             'purifierConfigs' => $this->getPurifierConfigOptions(),
+            'ckeditorConfigs' => $this->getCKEditorConfigOptions(),
         ]);
+    }
+
+    /**
+     * Returns select options for every .js file found in config/ckeditor/.
+     */
+    private function getCKEditorConfigOptions(): array
+    {
+        $options = [['label' => Craft::t('inline-editor', 'None'), 'value' => '']];
+
+        $dir = Craft::$app->getPath()->getConfigPath() . DIRECTORY_SEPARATOR . 'ckeditor';
+        if (is_dir($dir)) {
+            foreach (glob($dir . DIRECTORY_SEPARATOR . '*.js') ?: [] as $file) {
+                $name = pathinfo($file, PATHINFO_FILENAME);
+                $options[] = ['label' => $name, 'value' => $name];
+            }
+        }
+
+        return $options;
     }
 
     /**

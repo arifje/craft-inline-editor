@@ -21,11 +21,18 @@ class Settings extends Model
      */
     public string $ckeditorPurifierConfig = '';
 
+    /**
+     * Filename (without .js extension) of the CKEditor JS config to load from
+     * config/ckeditor/. Its exported object is merged with the inline editor's
+     * base CKEditor config, so toolbar items, plugins and decorators are applied.
+     */
+    public string $ckeditorConfig = '';
+
     public function defineRules(): array
     {
         return [
             ['allowedGroupIds', 'each', 'rule' => ['integer']],
-            ['ckeditorPurifierConfig', 'string'],
+            [['ckeditorPurifierConfig', 'ckeditorConfig'], 'string'],
         ];
     }
 }

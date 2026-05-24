@@ -23,9 +23,20 @@
 
 <hr>
 
+<h2>{{ 'CKEditor' | t('inline-editor') }}</h2>
+
 {{ forms.selectField({
-    label: 'CKEditor — HTML Purifier Config' | t('inline-editor'),
-    instructions: 'Choose which HTML Purifier config to apply when saving CKEditor content via the inline editor. Config files are JSON files located in config/htmlpurifier/. Select "None" to rely on the field\'s own Craft settings.' | t('inline-editor'),
+    label: 'JavaScript Config' | t('inline-editor'),
+    instructions: 'Choose a CKEditor JS config from config/ckeditor/. Its toolbar, plugins and decorators will be merged into the inline editor. Select "None" to use the built-in defaults.' | t('inline-editor'),
+    id: 'ckeditorConfig',
+    name: 'ckeditorConfig',
+    options: ckeditorConfigs,
+    value: settings.ckeditorConfig
+}) }}
+
+{{ forms.selectField({
+    label: 'HTML Purifier Config' | t('inline-editor'),
+    instructions: 'Choose which HTML Purifier config to apply when saving CKEditor content. Config files are JSON files in config/htmlpurifier/. Select "None" to rely on the field\'s own Craft settings.' | t('inline-editor'),
     id: 'ckeditorPurifierConfig',
     name: 'ckeditorPurifierConfig',
     options: purifierConfigs,
