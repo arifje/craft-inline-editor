@@ -22,9 +22,10 @@ class Settings extends Model
     public string $ckeditorPurifierConfig = '';
 
     /**
-     * Filename (without .js extension) of the CKEditor JS config to load from
-     * config/ckeditor/. Its exported object is merged with the inline editor's
-     * base CKEditor config, so toolbar items, plugins and decorators are applied.
+     * UID of the CKEditor config (as defined in the craftcms/ckeditor plugin's
+     * CP settings and stored in project config). Its toolbar, heading levels,
+     * and custom JS are merged into the inline editor's CKEditor instance.
+     * Leave empty to use the built-in defaults.
      */
     public string $ckeditorConfig = '';
 

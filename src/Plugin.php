@@ -88,18 +88,30 @@ class Plugin extends BasePlugin
     }
 
     /**
-     * Returns select options for every .js file found in config/ckeditor/.
+     * Returns select options for every CKEditor config stored in the project
+     * config (managed by the craftcms/ckeditor plugin's CP settings). Falls
+     * back to a "None" option only when the CKEditor plugin is not installed.
      */
     private function getCKEditorConfigOptions(): array
     {
         $options = [['label' => Craft::t('inline-editor', 'None'), 'value' => '']];
 
-        $dir = Craft::$app->getPath()->getConfigPath() . DIRECTORY_SEPARATOR . 'ckeditor';
-        if (is_dir($dir)) {
-            foreach (glob($dir . DIRECTORY_SEPARATOR . '*.js') ?: [] as $file) {
-                $name = pathinfo($file, PATHINFO_FILENAME);
-                $options[] = ['label' => $name, 'value' => $name];
+        if (!class_exists(\craft\ckeditor\Plugin::class)) {
+            return $options;
+        }
+
+        try {
+            $ckPlugin = \craft\ckeditor\Plugin::getInstance();
+            if ($ckPlugin === null) {
+                return $options;
             }
+            foreach ($ckPlugin->getCkeConfigs()->getAll() as $ckeConfig) {
+                if ($ckeConfig->uid !== null && $ckeConfig->name !== null) {
+                    $options[] = ['label' => $ckeConfig->name, 'value' => $ckeConfig->uid];
+                }
+            }
+        } catch (\Throwable $e) {
+            // CKEditor plugin not properly initialised — show only "None".
         }
 
         return $options;

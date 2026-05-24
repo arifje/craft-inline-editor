@@ -26,8 +26,8 @@
 <h2>{{ 'CKEditor' | t('inline-editor') }}</h2>
 
 {{ forms.selectField({
-    label: 'JavaScript Config' | t('inline-editor'),
-    instructions: 'Choose a CKEditor JS config from config/ckeditor/. Its toolbar, plugins and decorators will be merged into the inline editor. Select "None" to use the built-in defaults.' | t('inline-editor'),
+    label: 'CKEditor Config' | t('inline-editor'),
+    instructions: 'Choose a CKEditor config defined in Settings → CKEditor. Its toolbar, heading levels, and custom JS will be applied to the inline editor. Select "None" to use the built-in defaults.' | t('inline-editor'),
     id: 'ckeditorConfig',
     name: 'ckeditorConfig',
     options: ckeditorConfigs,

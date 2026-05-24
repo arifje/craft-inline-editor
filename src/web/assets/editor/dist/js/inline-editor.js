@@ -450,49 +450,94 @@
 
     // ── CKEditor ───────────────────────────────────────────────────────────────
 
-    // Base CKEditor config used when no JS config file is selected.
+    // Base CKEditor config used when no Craft CKEditor config is selected.
     var CK_BASE_CONFIG = {
         toolbar: ['heading', '|', 'bold', 'italic', 'link', 'bulletedList', 'numberedList', '|', 'undo', 'redo']
     };
 
     /**
-     * Deep-merge a Craft CKEditor JS config object (window.InlineEditorCKConfig)
-     * with our base config.
+     * Build a CKEditor 5 heading plugin config from an array of level numbers.
      *
-     * Rules:
-     *  - toolbar:       craft config wins if present, otherwise use base
-     *  - extraPlugins:  concatenate both arrays
-     *  - link:          shallow-merge (craft wins per key)
-     *  - everything else at top level: craft config wins
+     * headingLevels: int[] like [2, 4]  →  heading: { options: [...] }
+     * headingLevels: false              →  no heading config (plugin not enabled)
+     */
+    function buildHeadingConfig(headingLevels) {
+        if (!Array.isArray(headingLevels) || headingLevels.length === 0) {
+            return null;
+        }
+        var options = [{ model: 'paragraph', title: 'Paragraph', class: 'ck-heading_paragraph' }];
+        headingLevels.forEach(function (level) {
+            var n = parseInt(level, 10);
+            if (!isNaN(n) && n >= 1 && n <= 6) {
+                options.push({
+                    model: 'heading' + n,
+                    view: 'h' + n,
+                    title: 'Heading ' + n,
+                    class: 'ck-heading_heading' + n
+                });
+            }
+        });
+        return { options: options };
+    }
+
+    /**
+     * Build the final CKEditor config by merging:
+     *  - CK_BASE_CONFIG (fallback defaults)
+     *  - window.InlineEditorCKData  { toolbar, headingLevels }  — JSON-safe, from PHP
+     *  - window.InlineEditorCKJsFn()  — evaluates the CK config's custom JS block,
+     *    which may return extraPlugins (with real class references), link decorators, etc.
+     *
+     * Merge rules:
+     *  - toolbar:       CKData wins if present, otherwise base
+     *  - heading:       built from CKData.headingLevels (skipped if false)
+     *  - extraPlugins:  base + jsFn result concatenated
+     *  - link:          shallow-merge (jsFn result wins per key)
+     *  - everything else from jsFn result: wins over base
      */
     function buildCKEditorConfig() {
-        var craft = window.InlineEditorCKConfig;
-        if (!craft || typeof craft !== 'object') {
-            return CK_BASE_CONFIG;
+        var data  = window.InlineEditorCKData  || null;   // { toolbar, headingLevels }
+        var jsFn  = window.InlineEditorCKJsFn  || null;   // function() { return {...} }
+
+        // Evaluate the custom JS block (may throw if syntax error in user config).
+        var extra = {};
+        if (typeof jsFn === 'function') {
+            try { extra = jsFn() || {}; } catch (_) {}
         }
 
         var result = {};
 
         // toolbar
-        result.toolbar = craft.toolbar || CK_BASE_CONFIG.toolbar;
-
-        // extraPlugins — merge arrays
-        var basePlugins = CK_BASE_CONFIG.extraPlugins || [];
-        var craftPlugins = Array.isArray(craft.extraPlugins) ? craft.extraPlugins : [];
-        if (basePlugins.length || craftPlugins.length) {
-            result.extraPlugins = basePlugins.concat(craftPlugins);
+        if (data && Array.isArray(data.toolbar) && data.toolbar.length) {
+            result.toolbar = data.toolbar;
+        } else {
+            result.toolbar = CK_BASE_CONFIG.toolbar;
         }
 
-        // link — shallow merge so decorators are preserved
-        if (craft.link || CK_BASE_CONFIG.link) {
-            result.link = Object.assign({}, CK_BASE_CONFIG.link || {}, craft.link || {});
+        // heading — only when headingLevels is a non-empty array
+        if (data && data.headingLevels !== false) {
+            var headingCfg = buildHeadingConfig(data.headingLevels);
+            if (headingCfg) {
+                result.heading = headingCfg;
+            }
         }
 
-        // all other top-level keys from the craft config
+        // extraPlugins — concatenate base + custom
+        var basePlugins  = CK_BASE_CONFIG.extraPlugins || [];
+        var extraPlugins = Array.isArray(extra.extraPlugins) ? extra.extraPlugins : [];
+        if (basePlugins.length || extraPlugins.length) {
+            result.extraPlugins = basePlugins.concat(extraPlugins);
+        }
+
+        // link — shallow-merge so decorators from jsFn are preserved
+        if (extra.link || CK_BASE_CONFIG.link) {
+            result.link = Object.assign({}, CK_BASE_CONFIG.link || {}, extra.link || {});
+        }
+
+        // all other top-level keys from the jsFn result
         var handled = ['toolbar', 'extraPlugins', 'link'];
-        Object.keys(craft).forEach(function (key) {
+        Object.keys(extra).forEach(function (key) {
             if (handled.indexOf(key) === -1) {
-                result[key] = craft[key];
+                result[key] = extra[key];
             }
         });
 
