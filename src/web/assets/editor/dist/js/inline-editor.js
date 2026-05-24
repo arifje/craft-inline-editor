@@ -150,6 +150,12 @@
     // ── Input builders ─────────────────────────────────────────────────────────
 
     Editor.prototype.currentValue = function () {
+        if (this.type === 'ckeditor') {
+            // data-value always holds the raw stored HTML, even when innerHtml
+            // was used to show a transformed display version.
+            var raw = this.el.getAttribute('data-value');
+            return raw !== null ? raw : this.el.innerHTML;
+        }
         var clone = this.el.cloneNode(true);
         var trig = clone.querySelector('.inline-editor__trigger');
         if (trig) { trig.remove(); }
@@ -558,6 +564,7 @@
                 this.el.appendChild(ph);
             }
         } else if (this.type === 'ckeditor') {
+            this.el.setAttribute('data-value', savedValue);
             this.el.innerHTML = savedValue;
         } else {
             this.el.appendChild(document.createTextNode(savedValue));

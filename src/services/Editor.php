@@ -39,6 +39,13 @@ class Editor extends Component
      *   - attributes:  Extra attributes (key => value)
      *   - inputType:   Override input type for plaintext (input|textarea)
      *   - placeholder: Empty-state placeholder text
+     *   - innerHtml:   Custom display HTML to show instead of the raw field value.
+     *                  Useful when the template applies Twig filters to the value
+     *                  (e.g. replacing blockquote classes, swapping domains).
+     *                  For CKEditor fields the raw value is still passed to the
+     *                  editor via data-value, so the admin edits the actual stored
+     *                  content regardless of display transformations.
+     *                  For non-admins the custom HTML is returned as-is.
      */
     public function render(ElementInterface $element, string $handle, array $options = []): string
     {
@@ -46,8 +53,11 @@ class Editor extends Component
         $rawValue = $this->getRawValue($element, $handle, $type);
         $displayValue = $this->getDisplayValue($type, $rawValue);
 
+        // Template-provided display HTML (e.g. with Twig filter transformations applied).
+        $innerHtml = isset($options['innerHtml']) ? (string)$options['innerHtml'] : null;
+
         if (!$this->isEditable($element)) {
-            return $displayValue;
+            return $innerHtml ?? $displayValue;
         }
 
         $defaultTag = in_array($type, [self::TYPE_CKEDITOR, self::TYPE_TAGS], true) ? 'div' : 'span';
@@ -72,6 +82,12 @@ class Editor extends Component
             $attrs['data-placeholder'] = $placeholder;
         }
 
+        if ($type === self::TYPE_CKEDITOR) {
+            // Always store the raw value so the JS editor loads the actual stored
+            // HTML, not a potentially-transformed display version.
+            $attrs['data-value'] = (string)$rawValue;
+        }
+
         if ($type === self::TYPE_TAGS) {
             $attrs['data-tags'] = json_encode($rawValue, JSON_UNESCAPED_UNICODE);
             $field = $this->getField($element, $handle);
@@ -88,7 +104,9 @@ class Editor extends Component
         }
 
         $attrString = $this->buildAttributes($attrs);
-        $inner = $displayValue !== '' ? $displayValue : ($placeholder !== '' ? '<span class="inline-editor__placeholder">' . htmlspecialchars($placeholder, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</span>' : '');
+
+        $display = $innerHtml ?? $displayValue;
+        $inner = $display !== '' ? $display : ($placeholder !== '' ? '<span class="inline-editor__placeholder">' . htmlspecialchars($placeholder, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</span>' : '');
 
         return "<{$tag} {$attrString}>{$inner}</{$tag}>";
     }
