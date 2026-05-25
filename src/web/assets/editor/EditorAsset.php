@@ -27,12 +27,6 @@ class EditorAsset extends AssetBundle
     {
         parent::registerAssetFiles($view);
 
-        // CSS is always needed (tag chips render for everyone).
-        // JS config globals are only written for users who can actually edit.
-        if (!Plugin::getInstance()->canCurrentUserEdit()) {
-            return;
-        }
-
         $config = [
             'saveUrl' => UrlHelper::actionUrl('inline-editor/default/save'),
             'searchTagsUrl' => UrlHelper::actionUrl('inline-editor/default/search-tags'),

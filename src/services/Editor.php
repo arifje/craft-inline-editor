@@ -57,7 +57,17 @@ class Editor extends Component
         $innerHtml = isset($options['innerHtml']) ? (string)$options['innerHtml'] : null;
 
         if (!$this->isEditable($element)) {
-            $display = $innerHtml ?? $displayValue;
+            // For tags: don't emit inline-editor__tag spans — the plugin CSS is
+            // not loaded for non-editors. Use plain spans so the site's own
+            // stylesheet (or bare inline text) is all that's needed.
+            if ($type === self::TYPE_TAGS && $innerHtml === null) {
+                $display = implode('', array_map(
+                    static fn(array $t) => '<span>' . htmlspecialchars($t['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</span>',
+                    $rawValue
+                ));
+            } else {
+                $display = $innerHtml ?? $displayValue;
+            }
 
             // If the template specified layout options (tag / class / attributes),
             // honour them for non-editors too so the page looks identical regardless
