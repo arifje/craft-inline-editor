@@ -57,7 +57,30 @@ class Editor extends Component
         $innerHtml = isset($options['innerHtml']) ? (string)$options['innerHtml'] : null;
 
         if (!$this->isEditable($element)) {
-            return $innerHtml ?? $displayValue;
+            $display = $innerHtml ?? $displayValue;
+
+            // If the template specified layout options (tag / class / attributes),
+            // honour them for non-editors too so the page looks identical regardless
+            // of login state.
+            $hasLayout = isset($options['tag'])
+                || (isset($options['class']) && $options['class'] !== '')
+                || !empty($options['attributes']);
+
+            if (!$hasLayout) {
+                return $display;
+            }
+
+            $defaultTag = in_array($type, [self::TYPE_CKEDITOR, self::TYPE_TAGS], true) ? 'div' : 'span';
+            $tag        = $options['tag'] ?? $defaultTag;
+            $attrs      = [];
+            if (!empty($options['class'])) {
+                $attrs['class'] = $options['class'];
+            }
+            foreach (($options['attributes'] ?? []) as $k => $v) {
+                $attrs[$k] = $v;
+            }
+            $attrStr = $this->buildAttributes($attrs);
+            return "<{$tag}" . ($attrStr !== '' ? " {$attrStr}" : '') . ">{$display}</{$tag}>";
         }
 
         $defaultTag = in_array($type, [self::TYPE_CKEDITOR, self::TYPE_TAGS], true) ? 'div' : 'span';
