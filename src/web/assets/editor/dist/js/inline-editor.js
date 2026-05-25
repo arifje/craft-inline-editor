@@ -712,7 +712,8 @@
 
     // ── Cancel ─────────────────────────────────────────────────────────────────
 
-    Editor.prototype.cancel = function () {
+    Editor.prototype.cancel = function (e) {
+        if (e) { e.stopPropagation(); }
         this.teardownCKEditor();
         clearTimeout(this._searchTimeout);
 
