@@ -156,9 +156,9 @@ class Plugin extends BasePlugin
                 if (!$request->getIsSiteRequest() || $request->getIsConsoleRequest()) {
                     return;
                 }
-                if (!Plugin::getInstance()->canCurrentUserEdit()) {
-                    return;
-                }
+                // Always register the bundle so the CSS (tag chips, etc.) is
+                // available to everyone. The JS config globals are only written
+                // for users who can actually edit — see EditorAsset::registerAssetFiles().
                 Craft::$app->getView()->registerAssetBundle(EditorAsset::class);
             }
         );
