@@ -49,7 +49,13 @@ class Editor extends Component
      */
     public function render(ElementInterface $element, string $handle, array $options = []): string
     {
-        $type = $this->detectType($element, $handle);
+        try {
+            $type = $this->detectType($element, $handle);
+        } catch (InvalidArgumentException $e) {
+            Craft::warning('Inline Editor: ' . $e->getMessage(), __METHOD__);
+            return $options['innerHtml'] ?? '';
+        }
+
         $rawValue = $this->getRawValue($element, $handle, $type);
         $displayValue = $this->getDisplayValue($type, $rawValue);
 
