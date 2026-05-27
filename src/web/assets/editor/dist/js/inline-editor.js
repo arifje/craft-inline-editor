@@ -68,6 +68,7 @@
         this.tagsTextInput = null;
         this.tagsDropdown = null;
         this._searchTimeout = null;
+        this._outsideClickHandler = null;
 
         this.editing = false;
 
@@ -145,6 +146,8 @@
             input.focus();
             if (typeof input.select === 'function') { input.select(); }
         }
+
+        this._startOutsideClickHandler();
     };
 
     // ── Input builders ─────────────────────────────────────────────────────────
@@ -448,6 +451,31 @@
         }
     };
 
+    // ── Click-outside to cancel ────────────────────────────────────────────────
+
+    Editor.prototype._startOutsideClickHandler = function () {
+        var self = this;
+        this._outsideClickHandler = function (e) {
+            // Ignore clicks inside the editor element itself.
+            if (self.el.contains(e.target)) { return; }
+            // CKEditor renders balloons and dropdowns outside the element in
+            // a .ck-body-wrapper div appended to <body>. Ignore those.
+            if (e.target.closest && e.target.closest('.ck-body-wrapper')) { return; }
+            self.cancel();
+        };
+        // Defer by one tick so the click that opened the editor doesn't
+        // immediately trigger the outside handler.
+        var handler = this._outsideClickHandler;
+        setTimeout(function () { document.addEventListener('click', handler); }, 0);
+    };
+
+    Editor.prototype._stopOutsideClickHandler = function () {
+        if (this._outsideClickHandler) {
+            document.removeEventListener('click', this._outsideClickHandler);
+            this._outsideClickHandler = null;
+        }
+    };
+
     // ── CKEditor ───────────────────────────────────────────────────────────────
 
     // Base CKEditor config used when no Craft CKEditor config is selected.
@@ -644,6 +672,7 @@
     // ── Finish (plain fields) ──────────────────────────────────────────────────
 
     Editor.prototype.finish = function (savedValue) {
+        this._stopOutsideClickHandler();
         this.teardownCKEditor();
         this.el.classList.remove('is-editing', 'is-saving');
         this.el.innerHTML = '';
@@ -674,6 +703,7 @@
 
     Editor.prototype.finishTags = function (tags) {
         var self = this;
+        this._stopOutsideClickHandler();
         this.el.classList.remove('is-editing', 'is-saving');
         this.el.innerHTML = '';
 
@@ -704,6 +734,7 @@
 
     Editor.prototype.cancel = function (e) {
         if (e) { e.stopPropagation(); }
+        this._stopOutsideClickHandler();
         this.teardownCKEditor();
         clearTimeout(this._searchTimeout);
 
