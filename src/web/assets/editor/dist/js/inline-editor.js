@@ -74,16 +74,6 @@
         this.trigger = createTrigger();
         this.trigger.addEventListener('click', this.start.bind(this));
         this.el.appendChild(this.trigger);
-
-        // Tags: clicking anywhere on the element (including the chips themselves)
-        // opens the editor — not just the small trigger button.
-        // The trigger's start() call uses stopPropagation so it won't double-fire.
-        if (this.type === 'tags') {
-            var tagSelf = this;
-            this.el.addEventListener('click', function (e) {
-                if (!tagSelf.editing) { tagSelf.start(e); }
-            });
-        }
     }
 
     // ── Edit start ─────────────────────────────────────────────────────────────

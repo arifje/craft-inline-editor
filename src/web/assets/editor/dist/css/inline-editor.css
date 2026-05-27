@@ -160,15 +160,6 @@
 
 /* ── Tags ─────────────────────────────────────────────────────────────────── */
 
-/* Whole element is the click target for tags, so show a pointer. */
-.inline-editor[data-type="tags"] {
-    cursor: pointer;
-}
-
-.inline-editor[data-type="tags"].is-editing {
-    cursor: default;
-}
-
 .inline-editor__tag {
     display: inline-flex;
     align-items: center;
