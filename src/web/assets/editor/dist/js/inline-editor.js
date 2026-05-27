@@ -456,6 +456,9 @@
     Editor.prototype._startOutsideClickHandler = function () {
         var self = this;
         this._outsideClickHandler = function (e) {
+            // If the target was removed from the DOM before the click bubbled
+            // here (e.g. a dropdown item that clears itself on click), ignore it.
+            if (!e.target.isConnected) { return; }
             // Ignore clicks inside the editor element itself.
             if (self.el.contains(e.target)) { return; }
             // CKEditor renders balloons and dropdowns outside the element in
