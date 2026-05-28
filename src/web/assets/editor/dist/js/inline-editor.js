@@ -581,10 +581,15 @@
                 self._assetError((result.body && result.body.error) || 'Upload failed.');
                 return;
             }
+            // Update the tracked asset ID.
+            self.assetIds = result.body.id ? [result.body.id] : [];
+            self.el.setAttribute('data-asset-ids', JSON.stringify(self.assetIds));
+            // Swap the image src to the raw upload URL immediately so the new
+            // asset is visible without a page reload.
+            var img = self.el.querySelector('img');
+            if (img && result.body.url) { img.src = result.body.url; }
+            self._flashSaved();
             self.dispatch('save', { url: result.body.url, id: result.body.id });
-            // Always reload — the image is almost certainly displayed through a
-            // server-side transform/srcset that cannot be reconstructed here.
-            window.location.reload();
         }).catch(function (err) {
             self._assetBusy(false);
             self._assetError(err && err.message ? err.message : 'Upload failed.');
@@ -629,9 +634,12 @@
                 self._assetError((result.body && result.body.error) || 'Could not remove asset.');
                 return;
             }
+            self.assetIds = [];
+            self.el.setAttribute('data-asset-ids', '[]');
+            var img = self.el.querySelector('img');
+            if (img) { img.remove(); }
+            self._flashSaved();
             self.dispatch('save', { cleared: true });
-            // Reload so the template re-renders without the removed asset.
-            window.location.reload();
         }).catch(function (err) {
             self._assetBusy(false);
             self._assetError(err && err.message ? err.message : 'Could not remove asset.');
