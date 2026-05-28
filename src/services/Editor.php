@@ -435,18 +435,41 @@ class Editor extends Component
      */
     public function resolveUploadFolder(AssetsField $field, ElementInterface $element): ?int
     {
-        $source = $field->uploadLocationSource ?? '';
+        // Craft 4/5: when "Restrict uploads to a single location" is OFF the
+        // configured target lives in defaultUploadLocationSource; when it is ON
+        // it lives in uploadLocationSource.  Try the restricted source first so
+        // that a field with explicit restriction always wins.
+        $source = (string)($field->uploadLocationSource ?? '');
+        if ($source === '') {
+            $source = (string)($field->defaultUploadLocationSource ?? '');
+        }
+
         if (!str_starts_with($source, 'volume:')) {
+            Craft::warning(
+                "Inline Editor: could not resolve upload folder — "
+                . "uploadLocationSource=\"{$source}\". "
+                . 'Check the "Upload Location" setting on the Assets field.',
+                __METHOD__
+            );
             return null;
         }
 
         $volumeUid = substr($source, strlen('volume:'));
         $volume = Craft::$app->getVolumes()->getVolumeByUid($volumeUid);
         if ($volume === null) {
+            Craft::warning(
+                "Inline Editor: volume with UID \"{$volumeUid}\" not found.",
+                __METHOD__
+            );
             return null;
         }
 
+        // Same fallback logic for the subpath.
         $subpath = trim((string)($field->uploadLocationSubpath ?? ''), '/');
+        if ($subpath === '') {
+            $subpath = trim((string)($field->defaultUploadLocationSubpath ?? ''), '/');
+        }
+
         if ($subpath !== '') {
             try {
                 $subpath = Craft::$app->getView()->renderObjectTemplate($subpath, $element);
