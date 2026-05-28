@@ -102,6 +102,103 @@ class DefaultController extends Controller
     }
 
     /**
+     * Replace or clear an Assets field value.
+     *
+     * POST actions/inline-editor/default/replace-asset
+     *   elementId (int), siteId (int), field (string)
+     *   file (uploaded file)  — replaces the field with the uploaded file
+     *   clear=1               — empties the field instead
+     */
+    public function actionReplaceAsset(): Response
+    {
+        $this->requirePostRequest();
+        $this->requireAcceptsJson();
+
+        if (!Plugin::getInstance()->canCurrentUserEdit()) {
+            throw new ForbiddenHttpException('You do not have permission to use the inline editor.');
+        }
+
+        $request   = Craft::$app->getRequest();
+        $elementId = (int)$request->getRequiredBodyParam('elementId');
+        $siteId    = (int)($request->getBodyParam('siteId') ?: Craft::$app->getSites()->getCurrentSite()->id);
+        $handle    = (string)$request->getRequiredBodyParam('field');
+        $clear     = (bool)$request->getBodyParam('clear', false);
+
+        $element = Craft::$app->getElements()->getElementById($elementId, null, $siteId);
+        if (!$element) {
+            throw new BadRequestHttpException("Element {$elementId} not found.");
+        }
+
+        $field = $element->getFieldLayout()?->getFieldByHandle($handle);
+        if (!($field instanceof \craft\fields\Assets)) {
+            return $this->asJson([
+                'success' => false,
+                'error' => "Field \"{$handle}\" is not an Assets field.",
+            ])->setStatusCode(400);
+        }
+
+        // ── Clear ──────────────────────────────────────────────────────────────
+        if ($clear) {
+            $element->setFieldValue($handle, []);
+            if (!Craft::$app->getElements()->saveElement($element)) {
+                return $this->asJson([
+                    'success' => false,
+                    'error'   => 'Could not save element.',
+                    'errors'  => $element->getErrors(),
+                ])->setStatusCode(422);
+            }
+            return $this->asJson(['success' => true]);
+        }
+
+        // ── Replace ────────────────────────────────────────────────────────────
+        $uploadedFile = \yii\web\UploadedFile::getInstanceByName('file');
+        if ($uploadedFile === null) {
+            return $this->asJson([
+                'success' => false,
+                'error'   => 'No file provided.',
+            ])->setStatusCode(400);
+        }
+
+        $folderId = Plugin::getInstance()->getEditor()->resolveUploadFolder($field, $element);
+        if ($folderId === null) {
+            return $this->asJson([
+                'success' => false,
+                'error'   => 'Could not resolve the upload folder. Check the "Upload Location" setting on the Assets field.',
+            ])->setStatusCode(500);
+        }
+
+        $asset = new \craft\elements\Asset();
+        $asset->tempFilePath            = $uploadedFile->tempName;
+        $asset->filename                = \craft\helpers\Assets::prepareAssetName($uploadedFile->name);
+        $asset->newFolderId             = $folderId;
+        $asset->avoidFilenameConflicts  = true;
+        $asset->setScenario(\craft\elements\Asset::SCENARIO_CREATE);
+
+        if (!Craft::$app->getElements()->saveElement($asset)) {
+            return $this->asJson([
+                'success' => false,
+                'error'   => 'Could not save asset.',
+                'errors'  => $asset->getErrors(),
+            ])->setStatusCode(422);
+        }
+
+        $element->setFieldValue($handle, [$asset->id]);
+        if (!Craft::$app->getElements()->saveElement($element)) {
+            return $this->asJson([
+                'success' => false,
+                'error'   => 'Could not save element.',
+                'errors'  => $element->getErrors(),
+            ])->setStatusCode(422);
+        }
+
+        return $this->asJson([
+            'success' => true,
+            'url'     => $asset->getUrl(),
+            'id'      => $asset->id,
+        ]);
+    }
+
+    /**
      * Search tags within a group for the autocomplete dropdown.
      * GET  actions/inline-editor/default/search-tags
      *   ?groupId=1 &search=alb &siteId=1

@@ -9,6 +9,9 @@
         + '<path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.609Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75 12.25 5.189l1.263-1.263a.25.25 0 0 0 0-.354l-1.086-1.085ZM11.189 6.25 9.75 4.811l-6.286 6.287a.25.25 0 0 0-.064.108l-.558 1.953 1.953-.558a.25.25 0 0 0 .108-.064l6.286-6.287Z"/>'
         + '</svg>';
 
+    var UPLOAD_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14Z"/><path d="M11.78 4.72a.749.749 0 1 1-1.06 1.06L8.75 3.811V9.5a.75.75 0 0 1-1.5 0V3.811L5.28 5.78a.749.749 0 1 1-1.06-1.06l3.25-3.25a.749.749 0 0 1 1.06 0l3.25 3.25Z"/></svg>';
+    var TRASH_ICON  = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.575l-.66-6.6a.75.75 0 1 1 1.492-.15ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/></svg>';
+
     var config = window.InlineEditorConfig || {};
     var ckeditorPromise = null;
 
@@ -69,12 +72,18 @@
         this.tagsDropdown = null;
         this._searchTimeout = null;
         this._outsideClickHandler = null;
+        this._assetErrorEl = null;
 
         this.editing = false;
 
-        this.trigger = createTrigger();
-        this.trigger.addEventListener('click', this.start.bind(this));
-        this.el.appendChild(this.trigger);
+        if (this.type === 'assets') {
+            this.trigger = null;
+            this._initAssetOverlay();
+        } else {
+            this.trigger = createTrigger();
+            this.trigger.addEventListener('click', this.start.bind(this));
+            this.el.appendChild(this.trigger);
+        }
     }
 
     // ── Edit start ─────────────────────────────────────────────────────────────
@@ -449,6 +458,176 @@
             items[next].classList.add('is-active');
             items[next].scrollIntoView({ block: 'nearest' });
         }
+    };
+
+    // ── Assets overlay ────────────────────────────────────────────────────────
+
+    Editor.prototype._initAssetOverlay = function () {
+        var self = this;
+
+        // Wrapper shown in the top-right corner on hover.
+        var actions = document.createElement('div');
+        actions.className = 'inline-editor__asset-actions';
+
+        var replaceBtn = document.createElement('button');
+        replaceBtn.type = 'button';
+        replaceBtn.className = 'inline-editor__asset-btn';
+        replaceBtn.title = 'Replace';
+        replaceBtn.innerHTML = UPLOAD_ICON;
+
+        var clearBtn = document.createElement('button');
+        clearBtn.type = 'button';
+        clearBtn.className = 'inline-editor__asset-btn inline-editor__asset-btn--danger';
+        clearBtn.title = 'Remove';
+        clearBtn.innerHTML = TRASH_ICON;
+
+        actions.appendChild(replaceBtn);
+        actions.appendChild(clearBtn);
+
+        // Hidden file input — triggered by the replace button.
+        var fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '*/*';
+        fileInput.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
+
+        // Spinner overlay shown while uploading / clearing.
+        var overlay = document.createElement('div');
+        overlay.className = 'inline-editor__asset-overlay';
+        var spinner = document.createElement('div');
+        spinner.className = 'inline-editor__asset-spinner';
+        overlay.appendChild(spinner);
+
+        // Error message shown below the image on failure.
+        var errorEl = document.createElement('div');
+        errorEl.className = 'inline-editor__asset-error';
+        errorEl.hidden = true;
+
+        this.el.appendChild(actions);
+        this.el.appendChild(fileInput);
+        this.el.appendChild(overlay);
+        this.el.appendChild(errorEl);
+        this._assetErrorEl = errorEl;
+
+        replaceBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', function () {
+            if (fileInput.files && fileInput.files[0]) {
+                self._uploadAsset(fileInput.files[0]);
+                fileInput.value = ''; // reset so same file can be chosen again
+            }
+        });
+
+        clearBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            self._clearAsset();
+        });
+    };
+
+    Editor.prototype._assetBusy = function (busy) {
+        if (busy) {
+            this.el.classList.add('is-saving');
+        } else {
+            this.el.classList.remove('is-saving');
+        }
+    };
+
+    Editor.prototype._assetError = function (message) {
+        if (!this._assetErrorEl) { return; }
+        if (message) {
+            this._assetErrorEl.textContent = message;
+            this._assetErrorEl.hidden = false;
+            var el = this._assetErrorEl;
+            setTimeout(function () { el.hidden = true; }, 5000);
+        } else {
+            this._assetErrorEl.hidden = true;
+        }
+    };
+
+    Editor.prototype._uploadAsset = function (file) {
+        var self = this;
+        this._assetBusy(true);
+        this._assetError(null);
+
+        var body = new FormData();
+        body.append('elementId', this.elementId);
+        body.append('siteId', this.siteId);
+        body.append('field', this.field);
+        body.append('file', file);
+        if (config.csrfTokenName && config.csrfToken) {
+            body.append(config.csrfTokenName, config.csrfToken);
+        }
+
+        fetch(config.replaceAssetUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-Token': config.csrfToken || '',
+            },
+            body: body
+        }).then(function (res) {
+            return res.json().then(function (json) { return { status: res.status, body: json }; });
+        }).then(function (result) {
+            self._assetBusy(false);
+            if (!result.body || !result.body.success) {
+                self._assetError((result.body && result.body.error) || 'Upload failed.');
+                return;
+            }
+            // Update every <img> src inside the element (handles picture/img setups).
+            var img = self.el.querySelector('img');
+            if (img && result.body.url) { img.src = result.body.url; }
+            self._flashSaved();
+            self.dispatch('save', { url: result.body.url, id: result.body.id });
+        }).catch(function (err) {
+            self._assetBusy(false);
+            self._assetError(err && err.message ? err.message : 'Upload failed.');
+        });
+    };
+
+    Editor.prototype._clearAsset = function () {
+        var self = this;
+        this._assetBusy(true);
+        this._assetError(null);
+
+        var body = new URLSearchParams();
+        body.append('elementId', this.elementId);
+        body.append('siteId', this.siteId);
+        body.append('field', this.field);
+        body.append('clear', '1');
+        if (config.csrfTokenName && config.csrfToken) {
+            body.append(config.csrfTokenName, config.csrfToken);
+        }
+
+        fetch(config.replaceAssetUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-Token': config.csrfToken || '',
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            },
+            body: body.toString()
+        }).then(function (res) {
+            return res.json().then(function (json) { return { status: res.status, body: json }; });
+        }).then(function (result) {
+            self._assetBusy(false);
+            if (!result.body || !result.body.success) {
+                self._assetError((result.body && result.body.error) || 'Could not remove asset.');
+                return;
+            }
+            var img = self.el.querySelector('img');
+            if (img) { img.remove(); }
+            self._flashSaved();
+            self.dispatch('save', { cleared: true });
+        }).catch(function (err) {
+            self._assetBusy(false);
+            self._assetError(err && err.message ? err.message : 'Could not remove asset.');
+        });
     };
 
     // ── Click-outside to cancel ────────────────────────────────────────────────

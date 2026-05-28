@@ -271,3 +271,94 @@
     cursor: default;
     pointer-events: none;
 }
+
+/* ── Assets ───────────────────────────────────────────────────────────────── */
+
+.inline-editor__asset-actions {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 9999;
+}
+
+.inline-editor[data-type="assets"]:hover:not(.is-saving) .inline-editor__asset-actions {
+    display: flex;
+}
+
+.inline-editor__asset-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    border: none;
+    background: rgba(15, 23, 42, 0.65);
+    color: #fff;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(3px);
+    transition: background 0.12s ease;
+}
+
+.inline-editor__asset-btn:hover {
+    background: rgba(15, 23, 42, 0.9);
+}
+
+.inline-editor__asset-btn--danger:hover {
+    background: rgba(185, 28, 28, 0.85);
+}
+
+.inline-editor__asset-btn svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+}
+
+/* Spinner overlay while uploading / clearing. */
+.inline-editor__asset-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.4);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: inherit;
+    pointer-events: none;
+}
+
+.inline-editor[data-type="assets"].is-saving .inline-editor__asset-overlay {
+    display: flex;
+}
+
+.inline-editor__asset-spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: inline-editor-spin 0.75s linear infinite;
+}
+
+@keyframes inline-editor-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Error banner shown at the bottom of the element on failure. */
+.inline-editor__asset-error {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    background: rgba(185, 28, 28, 0.92);
+    color: #fff;
+    font-size: 11px;
+    line-height: 1.4;
+    padding: 5px 8px;
+    border-radius: 4px;
+    pointer-events: none;
+}

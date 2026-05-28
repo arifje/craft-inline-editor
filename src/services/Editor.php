@@ -7,6 +7,7 @@ use craft\base\Component;
 use craft\base\ElementInterface;
 use craft\base\Field;
 use craft\elements\Tag;
+use craft\fields\Assets as AssetsField;
 use craft\fields\PlainText;
 use craft\fields\Tags;
 use craft\fields\Url;
@@ -23,6 +24,7 @@ class Editor extends Component
     public const TYPE_URL = 'url';
     public const TYPE_CKEDITOR = 'ckeditor';
     public const TYPE_TAGS = 'tags';
+    public const TYPE_ASSETS = 'assets';
 
     /**
      * Render the wrapper HTML for an editable field.
@@ -99,12 +101,16 @@ class Editor extends Component
             return "<{$tag}" . ($attrStr !== '' ? " {$attrStr}" : '') . ">{$display}</{$tag}>";
         }
 
-        $defaultTag = in_array($type, [self::TYPE_CKEDITOR, self::TYPE_TAGS], true) ? 'div' : 'span';
+        $defaultTag = in_array($type, [self::TYPE_CKEDITOR, self::TYPE_TAGS, self::TYPE_ASSETS], true) ? 'div' : 'span';
         $tag = $options['tag'] ?? $defaultTag;
         $extraClass = $options['class'] ?? '';
         $extraAttributes = $options['attributes'] ?? [];
         $placeholder = $options['placeholder'] ?? '';
-        $inputType = $options['inputType'] ?? ($type === self::TYPE_CKEDITOR ? 'ckeditor' : ($this->looksMultiline($rawValue) ? 'textarea' : 'input'));
+        $inputType = $options['inputType'] ?? match(true) {
+            $type === self::TYPE_CKEDITOR => 'ckeditor',
+            $type === self::TYPE_ASSETS   => 'assets',
+            default                        => $this->looksMultiline($rawValue) ? 'textarea' : 'input',
+        };
 
         $attrs = [
             'class' => trim('inline-editor ' . $extraClass),
@@ -271,6 +277,10 @@ class Editor extends Component
 
         $field = $this->getField($element, $handle);
 
+        if ($field instanceof AssetsField) {
+            return self::TYPE_ASSETS;
+        }
+
         if ($field instanceof Tags) {
             return self::TYPE_TAGS;
         }
@@ -335,6 +345,10 @@ class Editor extends Component
             return $this->tagsToArray($value->all());
         }
 
+        if ($type === self::TYPE_ASSETS) {
+            return $value->ids(); // int[]
+        }
+
         return $value;
     }
 
@@ -342,6 +356,11 @@ class Editor extends Component
     {
         if ($type === self::TYPE_CKEDITOR) {
             return (string)$rawValue;
+        }
+
+        if ($type === self::TYPE_ASSETS) {
+            // Display is always provided by the template via the innerHtml option.
+            return '';
         }
 
         if ($type === self::TYPE_TAGS) {
@@ -399,6 +418,52 @@ class Editor extends Component
 
         $group = Craft::$app->getTags()->getTagGroupByUid($uid);
         return $group?->id;
+    }
+
+    /**
+     * Resolve the numeric folder ID to upload into for an Assets field.
+     *
+     * Reads the field's uploadLocationSource ("volume:{uid}") and
+     * uploadLocationSubpath (may contain object-template variables), then
+     * creates the subfolder tree if it doesn't yet exist.
+     */
+    public function resolveUploadFolder(AssetsField $field, ElementInterface $element): ?int
+    {
+        $source = $field->uploadLocationSource ?? '';
+        if (!str_starts_with($source, 'volume:')) {
+            return null;
+        }
+
+        $volumeUid = substr($source, strlen('volume:'));
+        $volume = Craft::$app->getVolumes()->getVolumeByUid($volumeUid);
+        if ($volume === null) {
+            return null;
+        }
+
+        $subpath = trim((string)($field->uploadLocationSubpath ?? ''), '/');
+        if ($subpath !== '') {
+            try {
+                $subpath = Craft::$app->getView()->renderObjectTemplate($subpath, $element);
+                $subpath = trim($subpath, '/');
+            } catch (\Throwable) {
+                $subpath = '';
+            }
+        }
+
+        try {
+            if ($subpath !== '') {
+                $folder = Craft::$app->getAssets()->ensureFolderByFullPathAndVolume(
+                    $subpath . '/',
+                    $volume
+                );
+            } else {
+                $folder = Craft::$app->getAssets()->getRootFolderByVolumeId($volume->id);
+            }
+        } catch (\Throwable) {
+            $folder = Craft::$app->getAssets()->getRootFolderByVolumeId($volume->id);
+        }
+
+        return $folder?->id;
     }
 
     private function buildAttributes(array $attrs): string
