@@ -19,8 +19,17 @@ class Extension extends AbstractExtension
     {
         return [
             new TwigFunction('inlineEditable', [$this, 'inlineEditable'], ['is_safe' => ['html']]),
-            new TwigFunction('inlineEditor', [$this, 'inlineEditable'], ['is_safe' => ['html']]),
+            new TwigFunction('inlineEditor',   [$this, 'inlineEditable'], ['is_safe' => ['html']]),
+            new TwigFunction('canInlineEdit',  [$this, 'canInlineEdit']),
         ];
+    }
+
+    /**
+     * Twig function — returns true when the current user may use the inline editor.
+     */
+    public function canInlineEdit(): bool
+    {
+        return Plugin::getInstance()->canCurrentUserEdit();
     }
 
     /**
