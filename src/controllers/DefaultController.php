@@ -156,6 +156,15 @@ class DefaultController extends Controller
                     'errors'  => $element->getErrors(),
                 ])->setStatusCode(422);
             }
+
+            // Delete the asset element (and its file) after unlinking it.
+            if ($removeId) {
+                $assetToDelete = Craft::$app->getElements()->getElementById($removeId, \craft\elements\Asset::class);
+                if ($assetToDelete) {
+                    Craft::$app->getElements()->deleteElement($assetToDelete);
+                }
+            }
+
             return $this->asJson(['success' => true]);
         }
 

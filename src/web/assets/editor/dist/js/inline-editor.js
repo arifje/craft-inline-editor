@@ -600,6 +600,9 @@
 
     Editor.prototype._clearAsset = function () {
         var self = this;
+
+        if (!window.confirm('Remove this asset? This cannot be undone.')) { return; }
+
         this._assetBusy(true);
         this._assetError(null);
 
