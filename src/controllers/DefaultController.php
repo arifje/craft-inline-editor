@@ -137,17 +137,39 @@ class DefaultController extends Controller
             ])->setStatusCode(400);
         }
 
-        // Which specific asset this wrapper manages (used in both clear and replace).
+        // Which specific asset this wrapper manages (used in both branches).
         $removeId = (int)$request->getBodyParam('removeAssetId', 0);
+
+        // Fetch current asset IDs once — shared by the safety checks and both branches.
+        $existingIds = array_map('intval', $element->getFieldValue($handle)->ids());
+
+        // ── Safety guards ──────────────────────────────────────────────────────
+        // Refuse to proceed without an explicit target so a missing/zero
+        // removeAssetId can never wipe the whole field or overwrite all assets.
+        if (!$removeId) {
+            // The only safe exception: uploading into a genuinely empty field
+            // (nothing to lose), and only for a replace, not a clear.
+            if ($clear || !empty($existingIds)) {
+                return $this->asJson([
+                    'success' => false,
+                    'error'   => 'removeAssetId is required.',
+                ])->setStatusCode(400);
+            }
+        } else {
+            // Verify the targeted asset actually belongs to this field on this
+            // element — prevents acting on an ID from a different field/entry.
+            if (!in_array($removeId, $existingIds, true)) {
+                return $this->asJson([
+                    'success' => false,
+                    'error'   => "Asset {$removeId} is not part of field \"{$handle}\" on element {$elementId}.",
+                ])->setStatusCode(400);
+            }
+        }
 
         // ── Clear ──────────────────────────────────────────────────────────────
         if ($clear) {
-            if ($removeId) {
-                $existingIds = array_map('intval', $element->getFieldValue($handle)->ids());
-                $newIds = array_values(array_diff($existingIds, [$removeId]));
-            } else {
-                $newIds = [];
-            }
+            // $removeId is guaranteed non-zero here (guard above).
+            $newIds = array_values(array_diff($existingIds, [$removeId]));
             $element->setFieldValue($handle, $newIds);
             if (!Craft::$app->getElements()->saveElement($element)) {
                 return $this->asJson([
@@ -158,11 +180,9 @@ class DefaultController extends Controller
             }
 
             // Delete the asset element (and its file) after unlinking it.
-            if ($removeId) {
-                $assetToDelete = Craft::$app->getElements()->getElementById($removeId, \craft\elements\Asset::class);
-                if ($assetToDelete) {
-                    Craft::$app->getElements()->deleteElement($assetToDelete);
-                }
+            $assetToDelete = Craft::$app->getElements()->getElementById($removeId, \craft\elements\Asset::class);
+            if ($assetToDelete) {
+                Craft::$app->getElements()->deleteElement($assetToDelete);
             }
 
             return $this->asJson(['success' => true]);
@@ -202,10 +222,10 @@ class DefaultController extends Controller
 
         // Swap only the managed slot; keep every other asset in the field intact
         // and preserve the original sort order by inserting at the same position.
+        // $existingIds was already fetched above — no second DB query needed.
         if ($removeId) {
-            $existingIds = array_map('intval', $element->getFieldValue($handle)->ids());
-            $position    = array_search($removeId, $existingIds, true);
-            $remaining   = array_values(array_diff($existingIds, [$removeId]));
+            $position  = array_search($removeId, $existingIds, true);
+            $remaining = array_values(array_diff($existingIds, [$removeId]));
 
             if ($position !== false) {
                 array_splice($remaining, (int)$position, 0, [$asset->id]);
@@ -214,6 +234,8 @@ class DefaultController extends Controller
             }
             $newIds = $remaining;
         } else {
+            // Empty field — safe to just set the new asset (guard above ensures
+            // this branch is only reached when $existingIds is empty).
             $newIds = [$asset->id];
         }
         $element->setFieldValue($handle, $newIds);

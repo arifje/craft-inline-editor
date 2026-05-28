@@ -599,6 +599,14 @@
     Editor.prototype._clearAsset = function () {
         var self = this;
 
+        // Guard: refuse if we have no tracked asset ID — sending without one
+        // would be rejected by the server anyway, and it prevents any chance of
+        // an accidental wipe if the data-asset-ids attribute is malformed.
+        if (!this.assetIds.length || !this.assetIds[0]) {
+            this._assetError('No asset ID tracked for this slot.');
+            return;
+        }
+
         if (!window.confirm('Remove this asset? This cannot be undone.')) { return; }
 
         this._assetBusy(true);
