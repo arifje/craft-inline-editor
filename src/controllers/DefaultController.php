@@ -137,9 +137,18 @@ class DefaultController extends Controller
             ])->setStatusCode(400);
         }
 
+        // Which specific asset this wrapper manages (used in both clear and replace).
+        $removeId = (int)$request->getBodyParam('removeAssetId', 0);
+
         // ── Clear ──────────────────────────────────────────────────────────────
         if ($clear) {
-            $element->setFieldValue($handle, []);
+            if ($removeId) {
+                $existingIds = array_map('intval', $element->getFieldValue($handle)->ids());
+                $newIds = array_values(array_diff($existingIds, [$removeId]));
+            } else {
+                $newIds = [];
+            }
+            $element->setFieldValue($handle, $newIds);
             if (!Craft::$app->getElements()->saveElement($element)) {
                 return $this->asJson([
                     'success' => false,
@@ -151,10 +160,6 @@ class DefaultController extends Controller
         }
 
         // ── Replace ────────────────────────────────────────────────────────────
-        // IDs of assets already in this field — available for multi-asset
-        // scenarios where only one slot should be swapped.
-        $existingAssetIds = array_map('intval', array_filter((array)$request->getBodyParam('existingAssetIds', [])));
-
         $uploadedFile = \yii\web\UploadedFile::getInstanceByName('file');
         if ($uploadedFile === null) {
             return $this->asJson([
@@ -186,7 +191,16 @@ class DefaultController extends Controller
             ])->setStatusCode(422);
         }
 
-        $element->setFieldValue($handle, [$asset->id]);
+        // Swap only the managed slot; keep every other asset in the field intact.
+        if ($removeId) {
+            $existingIds = array_map('intval', $element->getFieldValue($handle)->ids());
+            $remaining   = array_values(array_diff($existingIds, [$removeId]));
+            $remaining[] = $asset->id;
+            $newIds      = $remaining;
+        } else {
+            $newIds = [$asset->id];
+        }
+        $element->setFieldValue($handle, $newIds);
         if (!Craft::$app->getElements()->saveElement($element)) {
             return $this->asJson([
                 'success' => false,

@@ -557,9 +557,9 @@
         body.append('siteId', this.siteId);
         body.append('field', this.field);
         body.append('file', file);
-        // Pass current asset IDs so the server can swap a specific one in
-        // multi-asset fields rather than discarding the whole set.
-        this.assetIds.forEach(function (id) { body.append('existingAssetIds[]', id); });
+        // Tell the server which specific asset this wrapper manages so it can
+        // swap just that slot instead of replacing the whole field value.
+        if (this.assetIds.length > 0) { body.append('removeAssetId', this.assetIds[0]); }
         if (config.csrfTokenName && config.csrfToken) {
             body.append(config.csrfTokenName, config.csrfToken);
         }
@@ -584,10 +584,14 @@
             // Track the new asset ID and keep the data attribute in sync.
             self.assetIds = result.body.id ? [result.body.id] : [];
             self.el.setAttribute('data-asset-ids', JSON.stringify(self.assetIds));
-            var img = self.el.querySelector('img');
-            if (img && result.body.url) { img.src = result.body.url; }
             self._flashSaved();
             self.dispatch('save', { url: result.body.url, id: result.body.id });
+            if (self.el.hasAttribute('data-reload-on-save')) {
+                window.location.reload();
+                return;
+            }
+            var img = self.el.querySelector('img');
+            if (img && result.body.url) { img.src = result.body.url; }
         }).catch(function (err) {
             self._assetBusy(false);
             self._assetError(err && err.message ? err.message : 'Upload failed.');
@@ -604,6 +608,9 @@
         body.append('siteId', this.siteId);
         body.append('field', this.field);
         body.append('clear', '1');
+        // Tell the server which specific asset to remove, so it can use
+        // array_diff instead of wiping the whole field value.
+        if (this.assetIds.length > 0) { body.append('removeAssetId', this.assetIds[0]); }
         if (config.csrfTokenName && config.csrfToken) {
             body.append(config.csrfTokenName, config.csrfToken);
         }
@@ -628,10 +635,14 @@
             }
             self.assetIds = [];
             self.el.setAttribute('data-asset-ids', '[]');
-            var img = self.el.querySelector('img');
-            if (img) { img.remove(); }
             self._flashSaved();
             self.dispatch('save', { cleared: true });
+            if (self.el.hasAttribute('data-reload-on-save')) {
+                window.location.reload();
+                return;
+            }
+            var img = self.el.querySelector('img');
+            if (img) { img.remove(); }
         }).catch(function (err) {
             self._assetBusy(false);
             self._assetError(err && err.message ? err.message : 'Could not remove asset.');
