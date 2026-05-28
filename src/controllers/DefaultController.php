@@ -225,9 +225,14 @@ class DefaultController extends Controller
             ])->setStatusCode(422);
         }
 
+        // Re-fetch the asset so its path/folder are fully hydrated from the
+        // database; calling getUrl() on the just-saved in-memory object can
+        // return a URL without the subfolder component.
+        $freshAsset = Craft::$app->getElements()->getElementById($asset->id, \craft\elements\Asset::class);
+
         return $this->asJson([
             'success' => true,
-            'url'     => $asset->getUrl(),
+            'url'     => $freshAsset ? $freshAsset->getUrl() : $asset->getUrl(),
             'id'      => $asset->id,
         ]);
     }
