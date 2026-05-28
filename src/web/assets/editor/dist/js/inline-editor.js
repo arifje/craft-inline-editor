@@ -60,6 +60,7 @@
         this.type = el.getAttribute('data-type');
         this.groupId = el.getAttribute('data-group-id') || null;
         this.inputType = el.getAttribute('data-input') || 'input';
+        try { this.assetIds = JSON.parse(el.getAttribute('data-asset-ids') || '[]'); } catch (_) { this.assetIds = []; }
         this.placeholder = el.getAttribute('data-placeholder') || '';
 
         this.originalHtml = null;
@@ -556,6 +557,9 @@
         body.append('siteId', this.siteId);
         body.append('field', this.field);
         body.append('file', file);
+        // Pass current asset IDs so the server can swap a specific one in
+        // multi-asset fields rather than discarding the whole set.
+        this.assetIds.forEach(function (id) { body.append('existingAssetIds[]', id); });
         if (config.csrfTokenName && config.csrfToken) {
             body.append(config.csrfTokenName, config.csrfToken);
         }
@@ -577,7 +581,9 @@
                 self._assetError((result.body && result.body.error) || 'Upload failed.');
                 return;
             }
-            // Update every <img> src inside the element (handles picture/img setups).
+            // Track the new asset ID and keep the data attribute in sync.
+            self.assetIds = result.body.id ? [result.body.id] : [];
+            self.el.setAttribute('data-asset-ids', JSON.stringify(self.assetIds));
             var img = self.el.querySelector('img');
             if (img && result.body.url) { img.src = result.body.url; }
             self._flashSaved();
@@ -620,6 +626,8 @@
                 self._assetError((result.body && result.body.error) || 'Could not remove asset.');
                 return;
             }
+            self.assetIds = [];
+            self.el.setAttribute('data-asset-ids', '[]');
             var img = self.el.querySelector('img');
             if (img) { img.remove(); }
             self._flashSaved();

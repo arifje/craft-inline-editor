@@ -151,6 +151,10 @@ class DefaultController extends Controller
         }
 
         // ── Replace ────────────────────────────────────────────────────────────
+        // IDs of assets already in this field — available for multi-asset
+        // scenarios where only one slot should be swapped.
+        $existingAssetIds = array_map('intval', array_filter((array)$request->getBodyParam('existingAssetIds', [])));
+
         $uploadedFile = \yii\web\UploadedFile::getInstanceByName('file');
         if ($uploadedFile === null) {
             return $this->asJson([

@@ -127,6 +127,12 @@ class Editor extends Component
             $attrs['data-placeholder'] = $placeholder;
         }
 
+        if ($type === self::TYPE_ASSETS) {
+            // Store current asset IDs so JS knows what's set and can pass them
+            // to the server (e.g. to swap one asset in a multi-asset field).
+            $attrs['data-asset-ids'] = json_encode($rawValue, JSON_UNESCAPED_UNICODE);
+        }
+
         if ($type === self::TYPE_CKEDITOR) {
             // Always store the raw value so the JS editor loads the actual stored
             // HTML, not a potentially-transformed display version.
