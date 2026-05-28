@@ -2,7 +2,7 @@
     "name": "arifje/craft-inline-editor",
     "description": "Inline editing for Craft CMS entries on the frontend. Lets admins edit titles, plain text, URL and CKEditor fields directly on the rendered page.",
     "type": "craft-plugin",
-    "version": "1.6.6",
+    "version": "1.6.7",
     "license": "MIT",
     "keywords": [
         "craft",

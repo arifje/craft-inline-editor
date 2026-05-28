@@ -581,17 +581,10 @@
                 self._assetError((result.body && result.body.error) || 'Upload failed.');
                 return;
             }
-            // Track the new asset ID and keep the data attribute in sync.
-            self.assetIds = result.body.id ? [result.body.id] : [];
-            self.el.setAttribute('data-asset-ids', JSON.stringify(self.assetIds));
-            self._flashSaved();
             self.dispatch('save', { url: result.body.url, id: result.body.id });
-            if (self.el.hasAttribute('data-reload-on-save')) {
-                window.location.reload();
-                return;
-            }
-            var img = self.el.querySelector('img');
-            if (img && result.body.url) { img.src = result.body.url; }
+            // Always reload — the image is almost certainly displayed through a
+            // server-side transform/srcset that cannot be reconstructed here.
+            window.location.reload();
         }).catch(function (err) {
             self._assetBusy(false);
             self._assetError(err && err.message ? err.message : 'Upload failed.');
@@ -636,16 +629,9 @@
                 self._assetError((result.body && result.body.error) || 'Could not remove asset.');
                 return;
             }
-            self.assetIds = [];
-            self.el.setAttribute('data-asset-ids', '[]');
-            self._flashSaved();
             self.dispatch('save', { cleared: true });
-            if (self.el.hasAttribute('data-reload-on-save')) {
-                window.location.reload();
-                return;
-            }
-            var img = self.el.querySelector('img');
-            if (img) { img.remove(); }
+            // Reload so the template re-renders without the removed asset.
+            window.location.reload();
         }).catch(function (err) {
             self._assetBusy(false);
             self._assetError(err && err.message ? err.message : 'Could not remove asset.');

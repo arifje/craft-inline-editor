@@ -200,12 +200,19 @@ class DefaultController extends Controller
             ])->setStatusCode(422);
         }
 
-        // Swap only the managed slot; keep every other asset in the field intact.
+        // Swap only the managed slot; keep every other asset in the field intact
+        // and preserve the original sort order by inserting at the same position.
         if ($removeId) {
             $existingIds = array_map('intval', $element->getFieldValue($handle)->ids());
+            $position    = array_search($removeId, $existingIds, true);
             $remaining   = array_values(array_diff($existingIds, [$removeId]));
-            $remaining[] = $asset->id;
-            $newIds      = $remaining;
+
+            if ($position !== false) {
+                array_splice($remaining, (int)$position, 0, [$asset->id]);
+            } else {
+                $remaining[] = $asset->id;
+            }
+            $newIds = $remaining;
         } else {
             $newIds = [$asset->id];
         }
