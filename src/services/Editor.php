@@ -2,15 +2,18 @@
 
 namespace arifje\inlineeditor\services;
 
+use arifje\inlineeditor\helpers\ContentHelper;
+use arifje\inlineeditor\Plugin;
 use Craft;
 use craft\base\Component;
 use craft\base\ElementInterface;
-use craft\base\Field;
+use craft\base\FieldInterface;
 use craft\elements\Tag;
 use craft\fields\Assets as AssetsField;
 use craft\fields\PlainText;
 use craft\fields\Tags;
-use craft\fields\Url;
+use craft\helpers\Db;
+use Throwable;
 use yii\base\InvalidArgumentException;
 
 /**
@@ -29,7 +32,7 @@ class Editor extends Component
     /**
      * Render the wrapper HTML for an editable field.
      *
-     * When the current user is not an admin (or the request is not a site
+     * When the current user may not edit (or the request is not a site
      * request) the bare value is returned, so the helper is safe to use in any
      * template without leaking edit affordances to anonymous visitors.
      *
@@ -44,10 +47,10 @@ class Editor extends Component
      *   - innerHtml:   Custom display HTML to show instead of the raw field value.
      *                  Useful when the template applies Twig filters to the value
      *                  (e.g. replacing blockquote classes, swapping domains).
-     *                  For CKEditor fields the raw value is still passed to the
-     *                  editor via data-value, so the admin edits the actual stored
+     *                  For CKEditor fields the raw stored content is still passed to
+     *                  the editor via data-value, so the admin edits the actual stored
      *                  content regardless of display transformations.
-     *                  For non-admins the custom HTML is returned as-is.
+     *                  For non-editors the custom HTML is returned as-is.
      */
     public function render(ElementInterface $element, string $handle, array $options = []): string
     {
@@ -55,16 +58,27 @@ class Editor extends Component
             $type = $this->detectType($element, $handle);
         } catch (InvalidArgumentException $e) {
             Craft::warning('Inline Editor: ' . $e->getMessage(), __METHOD__);
-            return $options['innerHtml'] ?? '';
+            return isset($options['innerHtml']) ? (string)$options['innerHtml'] : '';
         }
 
-        $rawValue = $this->getRawValue($element, $handle, $type);
-        $displayValue = $this->getDisplayValue($type, $rawValue);
+        $field = $handle === 'title' ? null : $this->getField($element, $handle);
+        $fieldValue = $handle === 'title' ? $element->title : $element->getFieldValue($handle);
+        $rawValue = $this->getRawValue($fieldValue, $type);
+        $displayValue = $this->getDisplayValue($type, $fieldValue, $rawValue);
 
         // Template-provided display HTML (e.g. with Twig filter transformations applied).
         $innerHtml = isset($options['innerHtml']) ? (string)$options['innerHtml'] : null;
 
-        if (!$this->isEditable($element)) {
+        $editable = $this->isEditable($element);
+        if ($editable) {
+            $blocker = $this->getEditBlocker($element, $handle, $type, $fieldValue, $rawValue);
+            if ($blocker !== null) {
+                Craft::info('Inline Editor: ' . $blocker, __METHOD__);
+                $editable = false;
+            }
+        }
+
+        if (!$editable) {
             // For tags: don't emit inline-editor__tag spans — the plugin CSS is
             // not loaded for non-editors. Use plain spans so the site's own
             // stylesheet (or bare inline text) is all that's needed.
@@ -123,6 +137,10 @@ class Editor extends Component
             'data-input' => $inputType,
         ];
 
+        if ($field !== null && is_string($field->uid) && $field->uid !== '') {
+            $attrs['data-field-uid'] = $field->uid;
+        }
+
         if ($placeholder !== '') {
             $attrs['data-placeholder'] = $placeholder;
         }
@@ -134,14 +152,18 @@ class Editor extends Component
         }
 
         if ($type === self::TYPE_CKEDITOR) {
-            // Always store the raw value so the JS editor loads the actual stored
-            // HTML, not a potentially-transformed display version.
+            // Always store the raw stored content (reference tags intact) so the
+            // editor works on what is actually saved, not on the rendered output.
             $attrs['data-value'] = (string)$rawValue;
+
+            if ($field !== null) {
+                // Expose the configuration of *this* field to inline-editor.js.
+                Plugin::getInstance()->getCkeditor()->registerFieldConfig($field, Craft::$app->getView());
+            }
         }
 
         if ($type === self::TYPE_TAGS) {
             $attrs['data-tags'] = json_encode($rawValue, JSON_UNESCAPED_UNICODE);
-            $field = $this->getField($element, $handle);
             if ($field instanceof Tags) {
                 $groupId = $this->getGroupIdFromTagsField($field);
                 if ($groupId !== null) {
@@ -164,17 +186,48 @@ class Editor extends Component
 
     /**
      * Persist a plain-text / URL / CKEditor field value.
+     *
+     * @throws InvalidArgumentException when the field is not inline-editable, or its
+     *   current content cannot be edited safely from the frontend.
      */
     public function save(ElementInterface $element, string $handle, mixed $value): bool
     {
         $type = $this->detectType($element, $handle);
+
+        if ($type === self::TYPE_TAGS || $type === self::TYPE_ASSETS) {
+            throw new InvalidArgumentException(
+                "Field \"{$handle}\" is a " . ($type === self::TYPE_TAGS ? 'Tags' : 'Assets')
+                . ' field and cannot be saved as a text value.'
+            );
+        }
+
         $sanitized = $this->sanitize($value, $type);
 
         if ($type === self::TYPE_CKEDITOR) {
-            $configName = \arifje\inlineeditor\Plugin::getInstance()->getSettings()->ckeditorPurifierConfig;
+            $current = ContentHelper::rawContent($element->getFieldValue($handle));
+            if (ContentHelper::containsNestedEntries($current)) {
+                throw new InvalidArgumentException(
+                    "Field \"{$handle}\" contains nested entries, which can only be edited in the control panel."
+                );
+            }
+            if (ContentHelper::containsNestedEntries($sanitized)) {
+                throw new InvalidArgumentException('Nested entries cannot be created or edited inline.');
+            }
+
+            $configName = Plugin::getInstance()->getSettings()->ckeditorPurifierConfig;
             if ($configName !== '') {
                 $sanitized = $this->purifyHtml($sanitized, $configName);
             }
+        }
+
+        if ($type === self::TYPE_TITLE && !$this->hasEditableTitle($element)) {
+            throw new InvalidArgumentException('This entry type has no Title field; its title is generated and cannot be edited inline.');
+        }
+
+        if ($type === self::TYPE_URL && $this->isElementLink($element->getFieldValue($handle))) {
+            throw new InvalidArgumentException(
+                "Field \"{$handle}\" links to an element, which can only be changed in the control panel."
+            );
         }
 
         if ($handle === 'title') {
@@ -187,13 +240,40 @@ class Editor extends Component
     }
 
     /**
+     * The values to hand back to the frontend after a successful save.
+     *
+     * @return array{value: string, rawValue: string|null} `value` is what to display
+     *   (rendered HTML for CKEditor fields, plain text otherwise); `rawValue` is the
+     *   stored CKEditor content for the next edit, null for other types.
+     */
+    public function getSavedValues(ElementInterface $element, string $handle): array
+    {
+        $type = $this->detectType($element, $handle);
+        $fieldValue = $handle === 'title' ? $element->title : $element->getFieldValue($handle);
+
+        if ($type === self::TYPE_CKEDITOR) {
+            return [
+                'value' => $fieldValue === null ? '' : (string)$fieldValue,
+                'rawValue' => ContentHelper::rawContent($fieldValue),
+            ];
+        }
+
+        $raw = $this->getRawValue($fieldValue, $type);
+
+        return [
+            'value' => is_scalar($raw) ? (string)$raw : '',
+            'rawValue' => null,
+        ];
+    }
+
+    /**
      * Run HTML through a purifier config file from config/htmlpurifier/.
      */
     private function purifyHtml(string $html, string $configFile): string
     {
         $path = Craft::$app->getPath()->getConfigPath()
             . DIRECTORY_SEPARATOR . 'htmlpurifier'
-            . DIRECTORY_SEPARATOR . $configFile . '.json';
+            . DIRECTORY_SEPARATOR . basename($configFile) . '.json';
 
         if (!is_file($path)) {
             Craft::warning("Inline Editor: HTML Purifier config \"{$configFile}.json\" not found at {$path}.", __METHOD__);
@@ -274,6 +354,8 @@ class Editor extends Component
 
     /**
      * Detect which input UI to expose for a given field handle.
+     *
+     * @throws InvalidArgumentException when the field does not exist or is not supported.
      */
     public function detectType(ElementInterface $element, string $handle): string
     {
@@ -282,6 +364,10 @@ class Editor extends Component
         }
 
         $field = $this->getField($element, $handle);
+
+        if ($field === null) {
+            throw new InvalidArgumentException("Field \"{$handle}\" does not exist in the field layout of element {$element->id}.");
+        }
 
         if ($field instanceof AssetsField) {
             return self::TYPE_ASSETS;
@@ -295,17 +381,93 @@ class Editor extends Component
             return self::TYPE_PLAINTEXT;
         }
 
-        if ($field instanceof Url) {
+        if ($this->isUrlField($field)) {
             return self::TYPE_URL;
         }
 
-        // CKEditor is an optional plugin — match by class name to avoid a hard dependency.
-        $class = $field !== null ? get_class($field) : '';
-        if ($class !== '' && str_contains(strtolower($class), 'ckeditor')) {
+        if (Ckeditor::isCkeditorField($field)) {
             return self::TYPE_CKEDITOR;
         }
 
-        throw new InvalidArgumentException("Field \"{$handle}\" is not a supported inline-editable field type.");
+        throw new InvalidArgumentException(
+            "Field \"{$handle}\" (" . get_class($field) . ') is not a supported inline-editable field type.'
+        );
+    }
+
+    /**
+     * Craft 4 URL fields, and the Link fields that replaced them in Craft 5.3.
+     * Link fields are editable inline as long as they hold a plain URL / email /
+     * phone value; links to elements (entries, assets, …) are left to the control panel.
+     */
+    private function isUrlField(FieldInterface $field): bool
+    {
+        if (class_exists(\craft\fields\Url::class) && $field instanceof \craft\fields\Url) {
+            return true;
+        }
+        return class_exists(\craft\fields\Link::class) && $field instanceof \craft\fields\Link;
+    }
+
+    /**
+     * Whether the value is a Craft 5 LinkData object (duck-typed so Craft 4 never
+     * needs the class).
+     */
+    private function isLinkData(mixed $value): bool
+    {
+        return is_object($value)
+            && method_exists($value, 'getValue')
+            && method_exists($value, 'getElement');
+    }
+
+    private function isElementLink(mixed $value): bool
+    {
+        if (!$this->isLinkData($value)) {
+            return false;
+        }
+        try {
+            return $value->getElement() !== null;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Returns a reason why this particular value must not be edited inline, or null.
+     */
+    private function getEditBlocker(ElementInterface $element, string $handle, string $type, mixed $fieldValue, mixed $rawValue): ?string
+    {
+        if ($type === self::TYPE_TITLE && !$this->hasEditableTitle($element)) {
+            return "element {$element->id} belongs to an entry type without a Title field (its title is generated); rendered read-only.";
+        }
+
+        if ($type === self::TYPE_CKEDITOR && ContentHelper::containsNestedEntries((string)$rawValue)) {
+            return "field \"{$handle}\" on element {$element->id} contains nested entries, which the inline editor cannot represent; rendered read-only (edit it in the control panel).";
+        }
+
+        if ($type === self::TYPE_URL && $this->isElementLink($fieldValue)) {
+            return "field \"{$handle}\" on element {$element->id} links to an element; rendered read-only (change the link in the control panel).";
+        }
+
+        return null;
+    }
+
+    /**
+     * Entries whose entry type has no Title field get a generated (or null) title
+     * on every save, so a manual title would be discarded immediately.
+     */
+    private function hasEditableTitle(ElementInterface $element): bool
+    {
+        if (!method_exists($element, 'getType')) {
+            return true;
+        }
+        try {
+            $entryType = $element->getType();
+        } catch (Throwable) {
+            return true;
+        }
+        if (!is_object($entryType) || !property_exists($entryType, 'hasTitleField')) {
+            return true;
+        }
+        return (bool)$entryType->hasTitleField;
     }
 
     private function createTag(Tags $field, string $title, int $siteId): ?Tag
@@ -314,6 +476,17 @@ class Editor extends Component
         if ($groupId === null) {
             Craft::warning("Inline Editor: could not resolve group ID for Tags field \"{$field->handle}\" — tag \"{$title}\" not created.", __METHOD__);
             return null;
+        }
+
+        // Tag titles are unique per group: reuse an existing tag instead of
+        // failing validation (e.g. when two editors add the same tag).
+        $existing = Tag::find()
+            ->groupId($groupId)
+            ->siteId($siteId)
+            ->title(Db::escapeParam($title))
+            ->one();
+        if ($existing !== null) {
+            return $existing;
         }
 
         $tag = new Tag([
@@ -330,7 +503,7 @@ class Editor extends Component
         return $tag;
     }
 
-    private function getField(ElementInterface $element, string $handle): ?Field
+    private function getField(ElementInterface $element, string $handle): ?FieldInterface
     {
         $layout = $element->getFieldLayout();
         if ($layout === null) {
@@ -339,29 +512,46 @@ class Editor extends Component
         return $layout->getFieldByHandle($handle);
     }
 
-    private function getRawValue(ElementInterface $element, string $handle, string $type): mixed
+    /**
+     * The editable representation of a field value:
+     * - CKEditor: the raw stored HTML (reference tags intact)
+     * - Link (Craft 5): the stored value (URL / mailto: / tel:)
+     * - Tags: [{id, title}, …]
+     * - Assets: [id, …]
+     * - everything else: the string value
+     */
+    private function getRawValue(mixed $fieldValue, string $type): mixed
     {
-        if ($handle === 'title') {
-            return $element->title;
+        switch ($type) {
+            case self::TYPE_TAGS:
+                return is_object($fieldValue) && method_exists($fieldValue, 'all')
+                    ? $this->tagsToArray($fieldValue->all())
+                    : [];
+
+            case self::TYPE_ASSETS:
+                return is_object($fieldValue) && method_exists($fieldValue, 'ids')
+                    ? array_map('intval', $fieldValue->ids())
+                    : [];
+
+            case self::TYPE_CKEDITOR:
+                return ContentHelper::rawContent($fieldValue);
+
+            case self::TYPE_URL:
+                if ($this->isLinkData($fieldValue)) {
+                    return (string)$fieldValue->getValue();
+                }
+                return $fieldValue === null ? '' : (string)$fieldValue;
+
+            default:
+                return $fieldValue === null ? '' : (string)$fieldValue;
         }
-
-        $value = $element->getFieldValue($handle);
-
-        if ($type === self::TYPE_TAGS) {
-            return $this->tagsToArray($value->all());
-        }
-
-        if ($type === self::TYPE_ASSETS) {
-            return $value->ids(); // int[]
-        }
-
-        return $value;
     }
 
-    private function getDisplayValue(string $type, mixed $rawValue): string
+    private function getDisplayValue(string $type, mixed $fieldValue, mixed $rawValue): string
     {
         if ($type === self::TYPE_CKEDITOR) {
-            return (string)$rawValue;
+            // Rendered output: reference tags parsed, nested entries rendered.
+            return $fieldValue === null ? '' : (string)$fieldValue;
         }
 
         if ($type === self::TYPE_ASSETS) {
@@ -377,16 +567,21 @@ class Editor extends Component
             ));
         }
 
+        if ($type === self::TYPE_URL && $this->isLinkData($fieldValue)) {
+            // The resolved URL (including any URL suffix), like `{{ entry.link }}` outputs.
+            return htmlspecialchars((string)$fieldValue, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        }
+
         return htmlspecialchars((string)$rawValue, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     private function isEditable(ElementInterface $element): bool
     {
         $request = Craft::$app->getRequest();
-        if (!$request->getIsSiteRequest() || $request->getIsConsoleRequest()) {
+        if ($request->getIsConsoleRequest() || !$request->getIsSiteRequest()) {
             return false;
         }
-        return \arifje\inlineeditor\Plugin::getInstance()->canCurrentUserEdit();
+        return Plugin::getInstance()->canCurrentUserEdit();
     }
 
     private function looksMultiline(mixed $value): bool
@@ -403,7 +598,7 @@ class Editor extends Component
     /**
      * Resolve the numeric group ID from a Tags field.
      *
-     * Craft 4/5 stores the group as source = "taggroup:{uid}", not as a direct
+     * Craft 4/5 store the group as source = "taggroup:{uid}", not as a direct
      * $groupId integer property, so we parse the source string and look up the
      * group by its UID.
      */
@@ -427,72 +622,25 @@ class Editor extends Component
     }
 
     /**
-     * Resolve the numeric folder ID to upload into for an Assets field.
+     * Resolve the folder ID to upload into for an Assets field.
      *
-     * Reads the field's uploadLocationSource ("volume:{uid}") and
-     * uploadLocationSubpath (may contain object-template variables), then
-     * creates the subfolder tree if it doesn't yet exist.
+     * Delegates to Craft's own resolution (`Assets::resolveDynamicPathToFolderId()`),
+     * which honours "Restrict assets to a single location", the default upload
+     * location, object-template subpaths, and creates missing folders — on
+     * Craft 4 and 5 alike.
      */
     public function resolveUploadFolder(AssetsField $field, ElementInterface $element): ?int
     {
-        // Craft 4/5: when "Restrict uploads to a single location" is OFF the
-        // configured target lives in defaultUploadLocationSource; when it is ON
-        // it lives in uploadLocationSource.  Try the restricted source first so
-        // that a field with explicit restriction always wins.
-        $source = (string)($field->uploadLocationSource ?? '');
-        if ($source === '') {
-            $source = (string)($field->defaultUploadLocationSource ?? '');
-        }
-
-        if (!str_starts_with($source, 'volume:')) {
-            Craft::warning(
-                "Inline Editor: could not resolve upload folder — "
-                . "uploadLocationSource=\"{$source}\". "
-                . 'Check the "Upload Location" setting on the Assets field.',
-                __METHOD__
-            );
-            return null;
-        }
-
-        $volumeUid = substr($source, strlen('volume:'));
-        $volume = Craft::$app->getVolumes()->getVolumeByUid($volumeUid);
-        if ($volume === null) {
-            Craft::warning(
-                "Inline Editor: volume with UID \"{$volumeUid}\" not found.",
-                __METHOD__
-            );
-            return null;
-        }
-
-        // Same fallback logic for the subpath.
-        $subpath = trim((string)($field->uploadLocationSubpath ?? ''), '/');
-        if ($subpath === '') {
-            $subpath = trim((string)($field->defaultUploadLocationSubpath ?? ''), '/');
-        }
-
-        if ($subpath !== '') {
-            try {
-                $subpath = Craft::$app->getView()->renderObjectTemplate($subpath, $element);
-                $subpath = trim($subpath, '/');
-            } catch (\Throwable) {
-                $subpath = '';
-            }
-        }
-
         try {
-            if ($subpath !== '') {
-                $folder = Craft::$app->getAssets()->ensureFolderByFullPathAndVolume(
-                    $subpath . '/',
-                    $volume
-                );
-            } else {
-                $folder = Craft::$app->getAssets()->getRootFolderByVolumeId($volume->id);
-            }
-        } catch (\Throwable) {
-            $folder = Craft::$app->getAssets()->getRootFolderByVolumeId($volume->id);
+            return $field->resolveDynamicPathToFolderId($element);
+        } catch (Throwable $e) {
+            Craft::warning(
+                "Inline Editor: could not resolve the upload folder for Assets field \"{$field->handle}\": "
+                . $e->getMessage() . ' Check the field’s “Upload Location” / “Asset Location” setting.',
+                __METHOD__
+            );
+            return null;
         }
-
-        return $folder?->id;
     }
 
     private function buildAttributes(array $attrs): string

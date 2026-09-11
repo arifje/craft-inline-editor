@@ -3,6 +3,7 @@
 namespace arifje\inlineeditor;
 
 use arifje\inlineeditor\models\Settings;
+use arifje\inlineeditor\services\Ckeditor;
 use arifje\inlineeditor\services\Editor;
 use arifje\inlineeditor\twig\Extension as TwigExtension;
 use arifje\inlineeditor\web\assets\editor\EditorAsset;
@@ -17,6 +18,7 @@ use yii\base\Event;
  * Inline Editor plugin.
  *
  * @property-read Editor $editor
+ * @property-read Ckeditor $ckeditor
  * @property-read Settings $settings
  */
 class Plugin extends BasePlugin
@@ -33,6 +35,7 @@ class Plugin extends BasePlugin
 
         $this->setComponents([
             'editor' => Editor::class,
+            'ckeditor' => Ckeditor::class,
         ]);
 
         Craft::$app->view->registerTwigExtension(new TwigExtension());
@@ -46,10 +49,18 @@ class Plugin extends BasePlugin
         return $this->get('editor');
     }
 
+    public function getCkeditor(): Ckeditor
+    {
+        return $this->get('ckeditor');
+    }
+
     /**
      * Returns true when the current user may use the inline editor.
      * Admins always have access; non-admins need to belong to at least one
      * of the groups configured in the plugin settings.
+     *
+     * This only gates the editing UI. Every save is additionally authorised
+     * per element through Craft's own permission checks (see DefaultController).
      */
     public function canCurrentUserEdit(): bool
     {
@@ -84,34 +95,33 @@ class Plugin extends BasePlugin
             'userGroups' => Craft::$app->getUserGroups()->getAllGroups(),
             'purifierConfigs' => $this->getPurifierConfigOptions(),
             'ckeditorConfigs' => $this->getCKEditorConfigOptions(),
+            'ckeditorInstalled' => Ckeditor::isPluginInstalled(),
+            'ckeditorPluginVersion' => Ckeditor::getPluginVersion(),
+            'ckeditorSharedConfigsSupported' => Ckeditor::supportsSharedConfigs(),
         ]);
     }
 
     /**
-     * Returns select options for every CKEditor config stored in the project
-     * config (managed by the craftcms/ckeditor plugin's CP settings). Falls
-     * back to a "None" option only when the CKEditor plugin is not installed.
+     * Returns select options for every shared CKEditor config (craftcms/ckeditor
+     * 3.x/4.x, Settings → CKEditor). Only a "None" option is returned when the
+     * CKEditor plugin is not installed or has no shared configs (5.x).
      */
     private function getCKEditorConfigOptions(): array
     {
-        $options = [['label' => Craft::t('inline-editor', 'None'), 'value' => '']];
+        $options = [['label' => Craft::t('inline-editor', 'None (use each field’s own config)'), 'value' => '']];
 
-        if (!class_exists(\craft\ckeditor\Plugin::class)) {
+        if (!Ckeditor::supportsSharedConfigs()) {
             return $options;
         }
 
         try {
-            $ckPlugin = \craft\ckeditor\Plugin::getInstance();
-            if ($ckPlugin === null) {
-                return $options;
-            }
-            foreach ($ckPlugin->getCkeConfigs()->getAll() as $ckeConfig) {
+            foreach (\craft\ckeditor\Plugin::getInstance()->getCkeConfigs()->getAll() as $ckeConfig) {
                 if ($ckeConfig->uid !== null && $ckeConfig->name !== null) {
                     $options[] = ['label' => $ckeConfig->name, 'value' => $ckeConfig->uid];
                 }
             }
         } catch (\Throwable $e) {
-            // CKEditor plugin not properly initialised — show only "None".
+            Craft::warning('Inline Editor: could not list the shared CKEditor configs: ' . $e->getMessage(), __METHOD__);
         }
 
         return $options;
@@ -153,7 +163,7 @@ class Plugin extends BasePlugin
             View::EVENT_BEFORE_RENDER_PAGE_TEMPLATE,
             static function (): void {
                 $request = Craft::$app->getRequest();
-                if (!$request->getIsSiteRequest() || $request->getIsConsoleRequest()) {
+                if ($request->getIsConsoleRequest() || !$request->getIsSiteRequest()) {
                     return;
                 }
                 if (!Plugin::getInstance()->canCurrentUserEdit()) {

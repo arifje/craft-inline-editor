@@ -13,7 +13,7 @@
 {% else %}
     {{ forms.checkboxGroupField({
         label: 'Allowed User Groups' | t('inline-editor'),
-        instructions: 'Members of these groups can use the inline editor on the frontend. Administrators always have access.' | t('inline-editor'),
+        instructions: 'Members of these groups can use the inline editor on the frontend. Administrators always have access. Every save is still checked against the user’s own Craft permissions for the element being edited.' | t('inline-editor'),
         id: 'allowedGroupIds',
         name: 'allowedGroupIds',
         options: groupOptions,
@@ -25,20 +25,71 @@
 
 <h2>{{ 'CKEditor' | t('inline-editor') }}</h2>
 
-{{ forms.selectField({
-    label: 'CKEditor Config' | t('inline-editor'),
-    instructions: 'Choose a CKEditor config defined in Settings → CKEditor. Its toolbar, heading levels, and custom JS will be applied to the inline editor. Select "None" to use the built-in defaults.' | t('inline-editor'),
-    id: 'ckeditorConfig',
-    name: 'ckeditorConfig',
-    options: ckeditorConfigs,
-    value: settings.ckeditorConfig
-}) }}
+{% if not ckeditorInstalled %}
+    <p class="light">{{ 'The CKEditor plugin is not installed. CKEditor fields become editable inline as soon as it is.' | t('inline-editor') }}</p>
+{% else %}
+    <p class="light">
+        {{ 'CKEditor plugin {version} detected. Inline editors use the toolbar, heading levels, config options and custom styles of the CKEditor field being edited.' | t('inline-editor', { version: ckeditorPluginVersion ?? '?' }) }}
+    </p>
+{% endif %}
+
+{% if ckeditorSharedConfigsSupported %}
+    {{ forms.selectField({
+        label: 'CKEditor Config Override' | t('inline-editor'),
+        instructions: 'Leave on “None” to use each field’s own CKEditor config. Select a config from Settings → CKEditor to apply that config to every inline CKEditor instead.' | t('inline-editor'),
+        id: 'ckeditorConfig',
+        name: 'ckeditorConfig',
+        options: ckeditorConfigs,
+        value: settings.ckeditorConfig
+    }) }}
+{% else %}
+    {% if settings.ckeditorConfig is not empty %}
+        <p class="warning with-icon">
+            {{ 'A CKEditor config override is still stored ({uid}), but the installed CKEditor plugin stores its configuration on each field, so the override is ignored. Save these settings to clear it.' | t('inline-editor', { uid: settings.ckeditorConfig }) }}
+        </p>
+    {% endif %}
+    {{ hiddenInput('ckeditorConfig', '') }}
+{% endif %}
 
 {{ forms.selectField({
     label: 'HTML Purifier Config' | t('inline-editor'),
-    instructions: 'Choose which HTML Purifier config to apply when saving CKEditor content. Config files are JSON files in config/htmlpurifier/. Select "None" to rely on the field\'s own Craft settings.' | t('inline-editor'),
+    instructions: 'Choose which HTML Purifier config to apply when saving CKEditor content, in addition to the field’s own purification. Config files are JSON files in config/htmlpurifier/. Select “None” to rely on the field’s own Craft settings.' | t('inline-editor'),
     id: 'ckeditorPurifierConfig',
     name: 'ckeditorPurifierConfig',
     options: purifierConfigs,
     value: settings.ckeditorPurifierConfig
+}) }}
+
+<hr>
+
+<h2>{{ 'Advanced: editor build' | t('inline-editor') }}</h2>
+
+<p class="light">
+    {{ 'By default the frontend loads the CKEditor build shipped with the CKEditor plugin (5.x), or a pinned CKEditor CDN build (3.x/4.x). Point these settings at a self-hosted build to avoid the CDN or to use a specific version.' | t('inline-editor') }}
+</p>
+
+{{ forms.textField({
+    label: 'CKEditor build URL' | t('inline-editor'),
+    instructions: 'URL of a self-hosted `ckeditor5.umd.js` (exposes `window.CKEDITOR`) or classic build (exposes `window.ClassicEditor`). Leave empty for the default.' | t('inline-editor'),
+    id: 'ckeditorBuildUrl',
+    name: 'ckeditorBuildUrl',
+    value: settings.ckeditorBuildUrl,
+    placeholder: 'https://example.com/assets/ckeditor5/ckeditor5.umd.js',
+}) }}
+
+{{ forms.textField({
+    label: 'CKEditor build CSS URL' | t('inline-editor'),
+    instructions: 'URL of the matching `ckeditor5.css`. Only used together with the build URL.' | t('inline-editor'),
+    id: 'ckeditorBuildCssUrl',
+    name: 'ckeditorBuildCssUrl',
+    value: settings.ckeditorBuildCssUrl,
+    placeholder: 'https://example.com/assets/ckeditor5/ckeditor5.css',
+}) }}
+
+{{ forms.textField({
+    label: 'CKEditor licence key' | t('inline-editor'),
+    instructions: 'Licence key for the self-hosted build (`GPL` for open-source builds from 44.0.0 on). Only used together with the build URL.' | t('inline-editor'),
+    id: 'ckeditorLicenseKey',
+    name: 'ckeditorLicenseKey',
+    value: settings.ckeditorLicenseKey,
 }) }}

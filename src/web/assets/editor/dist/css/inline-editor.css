@@ -83,11 +83,22 @@
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
 }
 
-.inline-editor__ckeditor {
+.inline-editor__ckeditor-loading {
+    box-sizing: border-box;
+    min-height: 6em;
+    padding: 8px 10px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    color: #64748b;
+    font-size: 13px;
+}
+
+/* CKEditor 5 renders its UI right after the (hidden) source textarea. Keep the
+   editable area readable regardless of the host site's colour scheme. */
+.inline-editor .ck.ck-editor__editable_inline {
     background: #fff;
     color: #111;
-    border: 1px solid #cbd5e1;
-    border-radius: 4px;
     min-height: 6em;
 }
 

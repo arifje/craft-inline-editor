@@ -1,8 +1,12 @@
 /* Inline Editor — frontend runtime.
    Renders an edit button on every [data-inline-editor] element, handles
-   swap-to-form, save (AJAX), and discard. Pure vanilla JS; no jQuery. */
+   swap-to-form, save (AJAX), and discard. Pure vanilla JS; no jQuery.
 
-(function () {
+   CKEditor fields lazy-load a CKEditor 5 build described by
+   window.InlineEditorConfig.ckeditor and use the per-field configuration that
+   the server registers in window.InlineEditorCKConfigs (keyed by field UID). */
+
+(function (root) {
     'use strict';
 
     var EDIT_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true">'
@@ -12,8 +16,16 @@
     var UPLOAD_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14Z"/><path d="M11.78 4.72a.749.749 0 1 1-1.06 1.06L8.75 3.811V9.5a.75.75 0 0 1-1.5 0V3.811L5.28 5.78a.749.749 0 1 1-1.06-1.06l3.25-3.25a.749.749 0 0 1 1.06 0l3.25 3.25Z"/></svg>';
     var TRASH_ICON  = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.575l-.66-6.6a.75.75 0 1 1 1.492-.15ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/></svg>';
 
-    var config = window.InlineEditorConfig || {};
-    var ckeditorPromise = null;
+    // Read lazily: the config is registered in <head>, this file runs at the end of <body>.
+    function config() {
+        return root.InlineEditorConfig || {};
+    }
+
+    function warn() {
+        if (root.console && typeof root.console.warn === 'function') {
+            root.console.warn.apply(root.console, arguments);
+        }
+    }
 
     function ready(fn) {
         if (document.readyState !== 'loading') {
@@ -23,21 +35,403 @@
         }
     }
 
-    function loadCKEditor() {
-        if (window.ClassicEditor) { return Promise.resolve(window.ClassicEditor); }
-        if (ckeditorPromise) { return ckeditorPromise; }
-        ckeditorPromise = new Promise(function (resolve, reject) {
+    function isPlainObject(value) {
+        return Object.prototype.toString.call(value) === '[object Object]';
+    }
+
+    // ── CKEditor build loading ─────────────────────────────────────────────────
+
+    var ckeditorPromise = null;
+
+    function loadScript(src) {
+        return new Promise(function (resolve, reject) {
             var script = document.createElement('script');
-            script.src = config.ckeditorCdn;
+            script.src = src;
             script.async = true;
-            script.onload = function () {
-                if (window.ClassicEditor) { resolve(window.ClassicEditor); }
-                else { reject(new Error('CKEditor loaded but ClassicEditor not found')); }
-            };
-            script.onerror = function () { reject(new Error('Failed to load CKEditor from ' + config.ckeditorCdn)); };
+            script.onload = function () { resolve(src); };
+            script.onerror = function () { reject(new Error('Failed to load ' + src)); };
             document.head.appendChild(script);
         });
+    }
+
+    function loadStylesheet(href) {
+        return new Promise(function (resolve) {
+            var existing = document.querySelector('link[rel="stylesheet"][href="' + href.replace(/"/g, '\\"') + '"]');
+            if (existing) { resolve(href); return; }
+            var link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = href;
+            link.onload = function () { resolve(href); };
+            link.onerror = function () {
+                warn('Inline Editor: the CKEditor stylesheet could not be loaded from ' + href + '; the editor will look unstyled.');
+                resolve(href);
+            };
+            document.head.appendChild(link);
+        });
+    }
+
+    /**
+     * Detect a loaded CKEditor 5 build.
+     *  - "namespace": ckeditor5.umd.js style builds exposing window.CKEDITOR with
+     *    every plugin class (the Craft-bundled and CDN builds); plugins are picked per toolbar.
+     *  - "prebuilt": legacy classic builds exposing window.ClassicEditor with a fixed
+     *    plugin set (ClassicEditor.builtinPlugins).
+     */
+    function detectBuild(scope) {
+        scope = scope || root;
+        if (scope.CKEDITOR && typeof scope.CKEDITOR.ClassicEditor === 'function') {
+            return {
+                kind: 'namespace',
+                ns: scope.CKEDITOR,
+                Editor: scope.CKEDITOR.ClassicEditor,
+                version: scope.CKEDITOR.version || scope.CKEDITOR_VERSION || null
+            };
+        }
+        if (typeof scope.ClassicEditor === 'function') {
+            return {
+                kind: 'prebuilt',
+                ns: null,
+                Editor: scope.ClassicEditor,
+                version: scope.CKEDITOR_VERSION || null
+            };
+        }
+        return null;
+    }
+
+    function loadCKEditor() {
+        if (ckeditorPromise) { return ckeditorPromise; }
+
+        var already = detectBuild();
+        if (already) {
+            ckeditorPromise = Promise.resolve(already);
+            return ckeditorPromise;
+        }
+
+        var ck = config().ckeditor || {};
+        if (!ck.scriptUrl) {
+            return Promise.reject(new Error('no CKEditor build is configured (InlineEditorConfig.ckeditor.scriptUrl is empty).'));
+        }
+
+        ckeditorPromise = Promise.resolve()
+            .then(function () { return ck.cssUrl ? loadStylesheet(ck.cssUrl) : null; })
+            .then(function () { return loadScript(ck.scriptUrl); })
+            .then(function () {
+                if (!ck.translationUrl) { return null; }
+                return loadScript(ck.translationUrl).catch(function () {
+                    warn('Inline Editor: no CKEditor translation could be loaded from ' + ck.translationUrl + '; the editor UI falls back to English.');
+                });
+            })
+            .then(function () {
+                var build = detectBuild();
+                if (!build) {
+                    throw new Error('the script at ' + ck.scriptUrl + ' loaded, but neither window.CKEDITOR (ckeditor5.umd.js) nor window.ClassicEditor (classic build) was found.');
+                }
+                return build;
+            });
+
+        // Allow a retry after a failed load (e.g. transient network error).
+        ckeditorPromise.catch(function () { ckeditorPromise = null; });
+
         return ckeditorPromise;
+    }
+
+    // ── CKEditor configuration ─────────────────────────────────────────────────
+
+    // Mirrors craft\ckeditor\CkeConfig / Field defaults.
+    var CK_DEFAULT_TOOLBAR = ['heading', '|', 'bold', 'italic', 'link'];
+
+    // Plugins that are always loaded, like the control panel does (minus Craft-only ones).
+    var CK_ALWAYS_PLUGINS = ['Essentials', 'Paragraph', 'SelectAll', 'Clipboard', 'Autoformat', 'PasteFromOffice', 'GeneralHtmlSupport', 'HtmlComment'];
+
+    var CK_IMAGE_PLUGINS = ['Image', 'ImageCaption', 'ImageStyle', 'ImageToolbar', 'LinkImage', 'AutoImage'];
+
+    /**
+     * Toolbar item → required plugin classes. Mirrors the CKEditor plugin's own
+     * button/plugin map, with Craft's control-panel-only plugins (CraftLink,
+     * CraftImageInsertUI, CraftEntries, ImageTransform, ImageEditor) replaced by
+     * their standard counterparts or marked as unavailable outside the CP.
+     */
+    var CK_PLUGIN_BUTTON_MAP = [
+        { buttons: ['alignment'], plugins: ['Alignment'] },
+        { buttons: ['link'], plugins: ['Link', 'AutoLink', 'LinkImage'] },
+        { buttons: ['blockQuote'], plugins: ['BlockQuote'] },
+        { buttons: ['bold'], plugins: ['Bold'] },
+        { buttons: ['bookmark'], plugins: ['Bookmark'] },
+        { buttons: ['code'], plugins: ['Code'] },
+        { buttons: ['codeBlock'], plugins: ['CodeBlock'] },
+        { buttons: ['bulletedList', 'numberedList'], plugins: ['List', 'ListProperties'] },
+        { buttons: ['fontSize', 'fontFamily', 'fontColor', 'fontBackgroundColor'], plugins: ['Font'] },
+        { buttons: ['findAndReplace'], plugins: ['FindAndReplace'] },
+        { buttons: ['fullscreen'], plugins: ['Fullscreen'] },
+        { buttons: ['heading'], plugins: ['Heading'] },
+        { buttons: ['horizontalLine'], plugins: ['HorizontalLine'] },
+        { buttons: ['htmlEmbed'], plugins: ['HtmlEmbed'] },
+        { buttons: ['outdent', 'indent'], plugins: ['Indent', 'IndentBlock'] },
+        { buttons: ['italic'], plugins: ['Italic'] },
+        { buttons: ['mediaEmbed'], plugins: ['MediaEmbed'] },
+        { buttons: ['pageBreak'], plugins: ['PageBreak'] },
+        { buttons: ['removeFormat'], plugins: ['RemoveFormat'] },
+        { buttons: ['sourceEditing'], plugins: ['SourceEditing'] },
+        { buttons: ['strikethrough'], plugins: ['Strikethrough'] },
+        { buttons: ['style'], plugins: ['Style'] },
+        { buttons: ['subscript'], plugins: ['Subscript'] },
+        { buttons: ['superscript'], plugins: ['Superscript'] },
+        { buttons: ['insertTable'], plugins: ['Table', 'TableCaption', 'TableCellProperties', 'TableProperties', 'TableToolbar', 'TableUI'] },
+        { buttons: ['textPartLanguage'], plugins: ['TextPartLanguage'] },
+        { buttons: ['todoList'], plugins: ['TodoList'] },
+        { buttons: ['underline'], plugins: ['Underline'] },
+        { buttons: ['undo', 'redo'], plugins: [] },   // provided by Essentials
+        { buttons: ['selectAll'], plugins: [] },      // provided by SelectAll
+        // Control-panel-only items: the plugins that keep existing content intact are
+        // still loaded, but the button itself cannot work outside the control panel.
+        { buttons: ['insertImage'], plugins: CK_IMAGE_PLUGINS, cpOnly: 'inserting images needs the control panel asset picker (existing images remain editable)' },
+        { buttons: ['createEntry'], plugins: [], cpOnly: 'nested entries can only be managed in the control panel' }
+    ];
+
+    /**
+     * Attributes written by Craft's "Advanced Link Fields" that the standard Link
+     * plugin would otherwise strip on load; General HTML Support keeps them intact.
+     * When the field config enables link decorators (`link.addTargetToExternalLinks`
+     * or `link.decorators`), `target` and `rel` must be left to the decorators:
+     * letting both features own them produces nested <a> elements in older builds.
+     */
+    var CK_LINK_ATTRIBUTES = ['target', 'title', 'id', 'rel', 'aria-label', 'download'];
+    var CK_DECORATOR_ATTRIBUTES = ['target', 'rel'];
+
+    function linkDecoratorsActive(linkConfig) {
+        if (!isPlainObject(linkConfig)) { return false; }
+        if (linkConfig.addTargetToExternalLinks) { return true; }
+        return isPlainObject(linkConfig.decorators) && Object.keys(linkConfig.decorators).length > 0;
+    }
+
+    function buildHtmlSupportAllow(linkConfig, customAllow) {
+        var attributes = linkDecoratorsActive(linkConfig)
+            ? CK_LINK_ATTRIBUTES.filter(function (name) { return CK_DECORATOR_ATTRIBUTES.indexOf(name) === -1; })
+            : CK_LINK_ATTRIBUTES.slice();
+        return [{ name: 'a', attributes: attributes, classes: true }].concat(Array.isArray(customAllow) ? customAllow : []);
+    }
+
+    function findButtonGroup(item) {
+        for (var i = 0; i < CK_PLUGIN_BUTTON_MAP.length; i++) {
+            if (CK_PLUGIN_BUTTON_MAP[i].buttons.indexOf(item) !== -1) { return CK_PLUGIN_BUTTON_MAP[i]; }
+        }
+        return null;
+    }
+
+    function buildHasPlugin(build, name) {
+        if (build.kind === 'namespace') {
+            return typeof build.ns[name] === 'function';
+        }
+        var builtin = build.Editor && build.Editor.builtinPlugins;
+        if (!Array.isArray(builtin)) { return true; } // cannot be verified for this build
+        return builtin.some(function (plugin) { return !!plugin && plugin.pluginName === name; });
+    }
+
+    function cleanSeparators(items) {
+        var out = [];
+        items.forEach(function (item) {
+            var isSep = item === '|' || item === '-';
+            if (isSep && (out.length === 0 || out[out.length - 1] === '|' || out[out.length - 1] === '-')) { return; }
+            out.push(item);
+        });
+        while (out.length && (out[out.length - 1] === '|' || out[out.length - 1] === '-')) { out.pop(); }
+        return out;
+    }
+
+    /**
+     * Verify every toolbar item against the loaded build.
+     * Returns { items, pluginNames, dropped: [{item, reason}] }.
+     */
+    function resolveToolbar(toolbar, build, buildLabel) {
+        var items = [];
+        var plugins = {};
+        var dropped = [];
+
+        function add(names) {
+            names.forEach(function (name) {
+                if (buildHasPlugin(build, name)) { plugins[name] = true; }
+            });
+        }
+
+        add(CK_ALWAYS_PLUGINS);
+
+        (Array.isArray(toolbar) ? toolbar : []).forEach(function (item) {
+            if (item === '|' || item === '-') { items.push(item); return; }
+            if (typeof item !== 'string' || item === '') {
+                dropped.push({ item: String(item), reason: 'not a valid toolbar item' });
+                return;
+            }
+            var group = findButtonGroup(item);
+            if (!group) {
+                dropped.push({ item: item, reason: 'no known CKEditor plugin provides this toolbar item (custom CKEditor packages are only available in the control panel)' });
+                return;
+            }
+            if (group.cpOnly) {
+                add(group.plugins);
+                dropped.push({ item: item, reason: group.cpOnly });
+                return;
+            }
+            var missing = group.plugins.filter(function (name) { return !buildHasPlugin(build, name); });
+            if (missing.length) {
+                dropped.push({ item: item, reason: 'the loaded CKEditor build (' + buildLabel + ') does not include the ' + missing.join(', ') + ' plugin' + (missing.length > 1 ? 's' : '') });
+                return;
+            }
+            add(group.plugins);
+            items.push(item);
+        });
+
+        return { items: cleanSeparators(items), pluginNames: Object.keys(plugins), dropped: dropped };
+    }
+
+    /**
+     * CKEditor heading config from Craft's heading levels: paragraph plus the
+     * allowed levels — and only those, exactly like the control panel.
+     */
+    function buildHeadingConfig(headingLevels) {
+        var options = [{ model: 'paragraph', title: 'Paragraph', class: 'ck-heading_paragraph' }];
+        (Array.isArray(headingLevels) ? headingLevels : []).forEach(function (level) {
+            var n = parseInt(level, 10);
+            if (!isNaN(n) && n >= 1 && n <= 6) {
+                options.push({ model: 'heading' + n, view: 'h' + n, title: 'Heading ' + n, class: 'ck-heading_heading' + n });
+            }
+        });
+        return { options: options };
+    }
+
+    /**
+     * Port of the CKEditor plugin's heading merge: custom options may restyle the
+     * allowed heading levels or add fully custom models, but cannot re-enable
+     * levels that the field disallows.
+     */
+    function mergeHeadingOptions(baseOptions, customOptions) {
+        var native = ['paragraph', 'heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6'];
+        var merged = {};
+        baseOptions.forEach(function (option) { merged[option.model] = option; });
+        customOptions.forEach(function (option) {
+            if (!option || typeof option.model !== 'string') { return; }
+            if (Object.prototype.hasOwnProperty.call(merged, option.model) || native.indexOf(option.model) === -1) {
+                merged[option.model] = option;
+            }
+        });
+        return Object.keys(merged).map(function (key) { return merged[key]; });
+    }
+
+    /**
+     * Build the CKEditor config for one field against the loaded build.
+     *
+     *  fieldConfig: { toolbar, headingLevels, options, js, name, handle, source } (from the server, may be null)
+     *  build:       result of detectBuild()
+     *  buildInfo:   InlineEditorConfig.ckeditor (licenseKey, languages, source, version)
+     *
+     * Returns { config, dropped, pluginNames, warnings }.
+     */
+    function buildCKEditorConfig(fieldConfig, build, buildInfo) {
+        fieldConfig = fieldConfig || {};
+        buildInfo = buildInfo || {};
+        var warnings = [];
+        var buildLabel = (buildInfo.source || 'unknown build') + (build.version ? ', CKEditor ' + build.version : '');
+
+        var toolbar = Array.isArray(fieldConfig.toolbar) && fieldConfig.toolbar.length ? fieldConfig.toolbar : CK_DEFAULT_TOOLBAR;
+        var resolved = resolveToolbar(toolbar, build, buildLabel);
+
+        var base = {
+            toolbar: { items: resolved.items },
+            heading: buildHeadingConfig(fieldConfig.headingLevels),
+            image: { toolbar: ['toggleImageCaption', 'imageTextAlternative'] },
+            table: { contentToolbar: ['tableRow', 'tableColumn', 'mergeTableCells'] },
+            htmlSupport: { allow: buildHtmlSupportAllow(null, []) },
+            language: {
+                ui: buildInfo.uiLanguage || 'en',
+                content: buildInfo.contentLanguage || buildInfo.uiLanguage || 'en'
+            }
+        };
+        if (build.kind === 'namespace') {
+            base.plugins = resolved.pluginNames.map(function (name) { return build.ns[name]; });
+        }
+        if (buildInfo.licenseKey) {
+            base.licenseKey = buildInfo.licenseKey;
+        }
+
+        // Custom config: JSON options, or the JavaScript config body — never both (same as Craft).
+        var custom = {};
+        if (isPlainObject(fieldConfig.options)) {
+            custom = fieldConfig.options;
+        } else if (typeof fieldConfig.js === 'function') {
+            try {
+                custom = fieldConfig.js();
+            } catch (err) {
+                warnings.push('the custom JavaScript config options threw an error and were ignored: ' + (err && err.message ? err.message : err));
+                custom = {};
+            }
+        }
+        if (!isPlainObject(custom)) {
+            if (custom !== undefined && custom !== null) {
+                warnings.push('the custom config options did not evaluate to an object and were ignored');
+            }
+            custom = {};
+        }
+
+        var cfg = Object.assign({}, base, custom);
+
+        // The verified toolbar items always win; other toolbar props from the custom config are kept.
+        cfg.toolbar = Object.assign({}, isPlainObject(custom.toolbar) ? custom.toolbar : {}, { items: resolved.items });
+
+        if (isPlainObject(custom.heading) && Array.isArray(custom.heading.options)) {
+            cfg.heading = Object.assign({}, custom.heading, { options: mergeHeadingOptions(base.heading.options, custom.heading.options) });
+        }
+
+        cfg.language = Object.assign({}, base.language,
+            isPlainObject(custom.language) ? custom.language : (typeof custom.language === 'string' ? { ui: custom.language } : {}));
+
+        var customSupport = isPlainObject(custom.htmlSupport) ? custom.htmlSupport : {};
+        cfg.htmlSupport = Object.assign({}, customSupport, {
+            allow: buildHtmlSupportAllow(cfg.link, customSupport.allow)
+        });
+
+        if (build.kind === 'namespace') {
+            var plugins = base.plugins.slice();
+            ['plugins', 'extraPlugins'].forEach(function (key) {
+                if (Array.isArray(custom[key])) {
+                    custom[key].forEach(function (plugin) {
+                        if (typeof plugin === 'function' && plugins.indexOf(plugin) === -1) { plugins.push(plugin); }
+                    });
+                }
+            });
+            cfg.plugins = plugins;
+            delete cfg.extraPlugins;
+        }
+
+        return { config: cfg, dropped: resolved.dropped, pluginNames: resolved.pluginNames, warnings: warnings };
+    }
+
+    function lookupFieldConfig(fieldUid, handle) {
+        var registry = root.InlineEditorCKConfigs || {};
+        if (fieldUid && registry[fieldUid]) { return registry[fieldUid]; }
+        var keys = Object.keys(registry);
+        for (var i = 0; i < keys.length; i++) {
+            if (registry[keys[i]] && registry[keys[i]].handle === handle) { return registry[keys[i]]; }
+        }
+        return null;
+    }
+
+    var reportedCK = {};
+
+    function reportCKDiagnostics(editor, fieldConfig, built, build, buildInfo) {
+        var key = editor.fieldUid || editor.field;
+        if (reportedCK[key]) { return; }
+        reportedCK[key] = true;
+
+        var label = 'Inline Editor: CKEditor field "' + editor.field + '"';
+        var buildLabel = (buildInfo.source || 'unknown build') + (build.version ? ', CKEditor ' + build.version : '');
+
+        if (!fieldConfig) {
+            warn(label + ': no field configuration was registered on this page; using the default toolbar. Check the Craft logs for "Inline Editor" warnings.');
+        }
+        built.warnings.forEach(function (message) { warn(label + ': ' + message + '.'); });
+        if (built.dropped.length) {
+            warn(label + ' (' + buildLabel + '): ' + built.dropped.length + ' toolbar item(s) are not available inline — '
+                + built.dropped.map(function (d) { return '"' + d.item + '" (' + d.reason + ')'; }).join('; ') + '.');
+        }
     }
 
     function createTrigger() {
@@ -57,6 +451,7 @@
         this.elementId = el.getAttribute('data-element-id');
         this.siteId = el.getAttribute('data-site-id');
         this.field = el.getAttribute('data-field');
+        this.fieldUid = el.getAttribute('data-field-uid') || null;
         this.type = el.getAttribute('data-type');
         this.groupId = el.getAttribute('data-group-id') || null;
         this.inputType = el.getAttribute('data-input') || 'input';
@@ -68,6 +463,7 @@
         this.selectedTags = [];
 
         this.ckeditorInstance = null;
+        this._mountToken = 0;
         this.tagsWrap = null;
         this.tagsTextInput = null;
         this.tagsDropdown = null;
@@ -113,6 +509,14 @@
         var input = this.buildInput(initialValue);
         form.appendChild(input);
 
+        if (this.type === 'ckeditor') {
+            var loading = document.createElement('div');
+            loading.className = 'inline-editor__ckeditor-loading';
+            loading.textContent = 'Loading editor…';
+            form.appendChild(loading);
+            this.loadingEl = loading;
+        }
+
         var actions = document.createElement('div');
         actions.className = 'inline-editor__actions';
 
@@ -146,7 +550,7 @@
         cancelBtn.addEventListener('click', this.cancel.bind(this));
 
         if (this.type === 'ckeditor') {
-            this.mountCKEditor(initialValue);
+            this.mountCKEditor();
         } else if (this.type === 'tags') {
             // keydown is handled inside buildTagsInput; focus the text input
             var self = this;
@@ -180,10 +584,13 @@
     Editor.prototype.buildInput = function (value) {
         if (this.type === 'tags') { return this.buildTagsInput(value); }
         if (this.type === 'ckeditor') {
-            var holder = document.createElement('div');
-            holder.className = 'inline-editor__ckeditor';
-            holder.innerHTML = value;
-            return holder;
+            // A textarea keeps the raw HTML out of the live DOM until CKEditor has
+            // parsed it; CKEditor reads its value as the initial data.
+            var source = document.createElement('textarea');
+            source.className = 'inline-editor__ckeditor';
+            source.value = value;
+            source.hidden = true;
+            return source;
         }
         if (this.type === 'url') {
             var url = document.createElement('input');
@@ -355,9 +762,10 @@
 
     Editor.prototype.searchTags = function (query) {
         var self = this;
-        if (!this.groupId || !config.searchTagsUrl) { return; }
+        var cfg = config();
+        if (!this.groupId || !cfg.searchTagsUrl) { return; }
 
-        var url = new URL(config.searchTagsUrl, window.location.href);
+        var url = new URL(cfg.searchTagsUrl, root.location.href);
         url.searchParams.set('groupId', this.groupId);
         url.searchParams.set('siteId', this.siteId);
         url.searchParams.set('search', query);
@@ -549,6 +957,7 @@
 
     Editor.prototype._uploadAsset = function (file) {
         var self = this;
+        var cfg = config();
         this._assetBusy(true);
         this._assetError(null);
 
@@ -560,17 +969,17 @@
         // Tell the server which specific asset this wrapper manages so it can
         // swap just that slot instead of replacing the whole field value.
         if (this.assetIds.length > 0) { body.append('removeAssetId', this.assetIds[0]); }
-        if (config.csrfTokenName && config.csrfToken) {
-            body.append(config.csrfTokenName, config.csrfToken);
+        if (cfg.csrfTokenName && cfg.csrfToken) {
+            body.append(cfg.csrfTokenName, cfg.csrfToken);
         }
 
-        fetch(config.replaceAssetUrl, {
+        fetch(cfg.replaceAssetUrl, {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
                 'Accept': 'application/json',
                 'X-Requested-With': 'XMLHttpRequest',
-                'X-CSRF-Token': config.csrfToken || '',
+                'X-CSRF-Token': cfg.csrfToken || '',
             },
             body: body
         }).then(function (res) {
@@ -598,6 +1007,7 @@
 
     Editor.prototype._clearAsset = function () {
         var self = this;
+        var cfg = config();
 
         // Guard: refuse if we have no tracked asset ID — sending without one
         // would be rejected by the server anyway, and it prevents any chance of
@@ -607,7 +1017,7 @@
             return;
         }
 
-        if (!window.confirm('Remove this asset? This cannot be undone.')) { return; }
+        if (!root.confirm('Remove this asset? This cannot be undone.')) { return; }
 
         this._assetBusy(true);
         this._assetError(null);
@@ -620,17 +1030,17 @@
         // Tell the server which specific asset to remove, so it can use
         // array_diff instead of wiping the whole field value.
         if (this.assetIds.length > 0) { body.append('removeAssetId', this.assetIds[0]); }
-        if (config.csrfTokenName && config.csrfToken) {
-            body.append(config.csrfTokenName, config.csrfToken);
+        if (cfg.csrfTokenName && cfg.csrfToken) {
+            body.append(cfg.csrfTokenName, cfg.csrfToken);
         }
 
-        fetch(config.replaceAssetUrl, {
+        fetch(cfg.replaceAssetUrl, {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
                 'Accept': 'application/json',
                 'X-Requested-With': 'XMLHttpRequest',
-                'X-CSRF-Token': config.csrfToken || '',
+                'X-CSRF-Token': cfg.csrfToken || '',
                 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
             },
             body: body.toString()
@@ -684,116 +1094,54 @@
 
     // ── CKEditor ───────────────────────────────────────────────────────────────
 
-    // Base CKEditor config used when no Craft CKEditor config is selected.
-    var CK_BASE_CONFIG = {
-        toolbar: ['heading', '|', 'bold', 'italic', 'link', 'bulletedList', 'numberedList', '|', 'undo', 'redo']
+    Editor.prototype.mountCKEditor = function () {
+        var self = this;
+        var token = ++this._mountToken;
+        this.setSaveEnabled(false);
+
+        loadCKEditor().then(function (build) {
+            if (token !== self._mountToken) { return null; }
+
+            var buildInfo = config().ckeditor || {};
+            var fieldConfig = lookupFieldConfig(self.fieldUid, self.field);
+            var built = buildCKEditorConfig(fieldConfig, build, buildInfo);
+            reportCKDiagnostics(self, fieldConfig, built, build, buildInfo);
+
+            return build.Editor.create(self.formInput, built.config).then(function (instance) {
+                if (token !== self._mountToken) {
+                    // The user discarded before the editor finished loading.
+                    instance.destroy().catch(function () {});
+                    return null;
+                }
+                self.ckeditorInstance = instance;
+                self._hideLoading();
+                self.setSaveEnabled(true);
+                instance.editing.view.focus();
+                return instance;
+            });
+        }).catch(function (err) {
+            if (token !== self._mountToken) { return; }
+            self._hideLoading();
+            self.showError('Could not load the editor: ' + (err && err.message ? err.message : err));
+            if (root.console && typeof root.console.error === 'function') {
+                root.console.error('Inline Editor: CKEditor could not be started.', err);
+            }
+        });
     };
 
-    /**
-     * Build a CKEditor 5 heading plugin config from an array of level numbers.
-     *
-     * headingLevels: int[] like [2, 4]  →  heading: { options: [...] }
-     * headingLevels: false              →  no heading config (plugin not enabled)
-     */
-    function buildHeadingConfig(headingLevels) {
-        if (!Array.isArray(headingLevels) || headingLevels.length === 0) {
-            return null;
+    Editor.prototype._hideLoading = function () {
+        if (this.loadingEl) {
+            this.loadingEl.remove();
+            this.loadingEl = null;
         }
-        var options = [{ model: 'paragraph', title: 'Paragraph', class: 'ck-heading_paragraph' }];
-        headingLevels.forEach(function (level) {
-            var n = parseInt(level, 10);
-            if (!isNaN(n) && n >= 1 && n <= 6) {
-                options.push({
-                    model: 'heading' + n,
-                    view: 'h' + n,
-                    title: 'Heading ' + n,
-                    class: 'ck-heading_heading' + n
-                });
-            }
-        });
-        return { options: options };
-    }
-
-    /**
-     * Build the final CKEditor config by merging:
-     *  - CK_BASE_CONFIG (fallback defaults)
-     *  - window.InlineEditorCKData  { toolbar, headingLevels }  — JSON-safe, from PHP
-     *  - window.InlineEditorCKJsFn()  — evaluates the CK config's custom JS block,
-     *    which may return extraPlugins (with real class references), link decorators, etc.
-     *
-     * Merge rules:
-     *  - toolbar:       CKData wins if present, otherwise base
-     *  - heading:       built from CKData.headingLevels (skipped if false)
-     *  - extraPlugins:  base + jsFn result concatenated
-     *  - link:          shallow-merge (jsFn result wins per key)
-     *  - everything else from jsFn result: wins over base
-     */
-    function buildCKEditorConfig() {
-        var data  = window.InlineEditorCKData  || null;   // { toolbar, headingLevels }
-        var jsFn  = window.InlineEditorCKJsFn  || null;   // function() { return {...} }
-
-        // Evaluate the custom JS block (may throw if syntax error in user config).
-        var extra = {};
-        if (typeof jsFn === 'function') {
-            try { extra = jsFn() || {}; } catch (_) {}
-        }
-
-        var result = {};
-
-        // toolbar
-        if (data && Array.isArray(data.toolbar) && data.toolbar.length) {
-            result.toolbar = data.toolbar;
-        } else {
-            result.toolbar = CK_BASE_CONFIG.toolbar;
-        }
-
-        // heading — only when headingLevels is a non-empty array
-        if (data && data.headingLevels !== false) {
-            var headingCfg = buildHeadingConfig(data.headingLevels);
-            if (headingCfg) {
-                result.heading = headingCfg;
-            }
-        }
-
-        // extraPlugins — concatenate base + custom
-        var basePlugins  = CK_BASE_CONFIG.extraPlugins || [];
-        var extraPlugins = Array.isArray(extra.extraPlugins) ? extra.extraPlugins : [];
-        if (basePlugins.length || extraPlugins.length) {
-            result.extraPlugins = basePlugins.concat(extraPlugins);
-        }
-
-        // link — shallow-merge so decorators from jsFn are preserved
-        if (extra.link || CK_BASE_CONFIG.link) {
-            result.link = Object.assign({}, CK_BASE_CONFIG.link || {}, extra.link || {});
-        }
-
-        // all other top-level keys from the jsFn result
-        var handled = ['toolbar', 'extraPlugins', 'link'];
-        Object.keys(extra).forEach(function (key) {
-            if (handled.indexOf(key) === -1) {
-                result[key] = extra[key];
-            }
-        });
-
-        return result;
-    }
-
-    Editor.prototype.mountCKEditor = function (value) {
-        var self = this;
-        loadCKEditor().then(function (ClassicEditor) {
-            return ClassicEditor.create(self.formInput, buildCKEditorConfig());
-        }).then(function (instance) {
-            self.ckeditorInstance = instance;
-            instance.setData(value);
-            instance.editing.view.focus();
-        }).catch(function (err) {
-            self.showError('Could not load editor: ' + err.message);
-        });
     };
 
     Editor.prototype.teardownCKEditor = function () {
+        // Invalidates any editor still loading for this element.
+        this._mountToken++;
+        this.loadingEl = null;
         if (this.ckeditorInstance) {
-            try { this.ckeditorInstance.destroy(); } catch (_) {}
+            try { this.ckeditorInstance.destroy().catch(function () {}); } catch (_) {}
             this.ckeditorInstance = null;
         }
     };
@@ -811,8 +1159,8 @@
     // ── Read value ─────────────────────────────────────────────────────────────
 
     Editor.prototype.readValue = function () {
-        if (this.type === 'ckeditor' && this.ckeditorInstance) {
-            return this.ckeditorInstance.getData();
+        if (this.type === 'ckeditor') {
+            return this.ckeditorInstance ? this.ckeditorInstance.getData() : null;
         }
         return this.formInput && 'value' in this.formInput ? this.formInput.value : '';
     };
@@ -821,6 +1169,14 @@
 
     Editor.prototype.save = function () {
         var self = this;
+        var cfg = config();
+
+        if (this.type === 'ckeditor' && !this.ckeditorInstance) {
+            // Never submit before the editor is ready: the value would be empty.
+            this.showError('The editor is still loading — please try again in a moment.');
+            return;
+        }
+
         this.setBusy(true);
         this.showError(null);
 
@@ -841,17 +1197,17 @@
             body.append('value', this.readValue());
         }
 
-        if (config.csrfTokenName && config.csrfToken) {
-            body.append(config.csrfTokenName, config.csrfToken);
+        if (cfg.csrfTokenName && cfg.csrfToken) {
+            body.append(cfg.csrfTokenName, cfg.csrfToken);
         }
 
-        fetch(config.saveUrl, {
+        fetch(cfg.saveUrl, {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
                 'Accept': 'application/json',
                 'X-Requested-With': 'XMLHttpRequest',
-                'X-CSRF-Token': config.csrfToken || '',
+                'X-CSRF-Token': cfg.csrfToken || '',
                 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
             },
             body: body.toString()
@@ -867,7 +1223,7 @@
             if (self.type === 'tags') {
                 self.finishTags(result.body.tags || []);
             } else {
-                self.finish(result.body.value);
+                self.finish(result.body.value, result.body.rawValue);
             }
         }).catch(function (err) {
             self.showError(err && err.message ? err.message : 'Save failed');
@@ -877,11 +1233,16 @@
 
     // ── Finish (plain fields) ──────────────────────────────────────────────────
 
-    Editor.prototype.finish = function (savedValue) {
+    Editor.prototype.finish = function (savedValue, rawValue) {
         this._stopOutsideClickHandler();
         this.teardownCKEditor();
         this.el.classList.remove('is-editing', 'is-saving');
         this.el.innerHTML = '';
+
+        if (this.type === 'ckeditor') {
+            // Keep the stored (unrendered) content for the next edit.
+            this.el.setAttribute('data-value', rawValue !== undefined && rawValue !== null ? rawValue : (savedValue || ''));
+        }
 
         if (savedValue === '' || savedValue == null) {
             if (this.placeholder) {
@@ -891,7 +1252,6 @@
                 this.el.appendChild(ph);
             }
         } else if (this.type === 'ckeditor') {
-            this.el.setAttribute('data-value', savedValue);
             this.el.innerHTML = savedValue;
         } else {
             this.el.appendChild(document.createTextNode(savedValue));
@@ -902,7 +1262,7 @@
 
         this.editing = false;
         this.originalHtml = null;
-        this.dispatch('save', { value: savedValue });
+        this.dispatch('save', { value: savedValue, rawValue: rawValue });
     };
 
     // ── Finish (tags) ──────────────────────────────────────────────────────────
@@ -975,6 +1335,10 @@
         setTimeout(function () { self.el.classList.remove('is-saved-flash'); }, 700);
     };
 
+    Editor.prototype.setSaveEnabled = function (enabled) {
+        if (this.saveBtn) { this.saveBtn.disabled = !enabled; }
+    };
+
     Editor.prototype.setBusy = function (busy) {
         if (busy) {
             this.el.classList.add('is-saving');
@@ -1013,8 +1377,8 @@
 
     // ── Init ───────────────────────────────────────────────────────────────────
 
-    function initAll(root) {
-        var nodes = (root || document).querySelectorAll('[data-inline-editor]:not([data-inline-editor-ready])');
+    function initAll(scope) {
+        var nodes = (scope || document).querySelectorAll('[data-inline-editor]:not([data-inline-editor-ready])');
         for (var i = 0; i < nodes.length; i++) {
             var el = nodes[i];
             el.setAttribute('data-inline-editor-ready', '1');
@@ -1023,7 +1387,25 @@
         }
     }
 
-    window.InlineEditor = { init: initAll };
+    root.InlineEditor = {
+        init: initAll,
+        // Unstable: exposed for the plugin's own tests and for debugging.
+        _internal: {
+            detectBuild: detectBuild,
+            resolveToolbar: resolveToolbar,
+            buildHeadingConfig: buildHeadingConfig,
+            mergeHeadingOptions: mergeHeadingOptions,
+            buildCKEditorConfig: buildCKEditorConfig,
+            lookupFieldConfig: lookupFieldConfig,
+            cleanSeparators: cleanSeparators,
+            buildHtmlSupportAllow: buildHtmlSupportAllow,
+            CK_PLUGIN_BUTTON_MAP: CK_PLUGIN_BUTTON_MAP,
+            CK_ALWAYS_PLUGINS: CK_ALWAYS_PLUGINS,
+            CK_DEFAULT_TOOLBAR: CK_DEFAULT_TOOLBAR
+        }
+    };
 
-    ready(function () { initAll(document); });
-})();
+    if (typeof document !== 'undefined') {
+        ready(function () { initAll(document); });
+    }
+})(typeof window !== 'undefined' ? window : globalThis);

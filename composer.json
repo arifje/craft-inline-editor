@@ -1,8 +1,8 @@
 {
     "name": "arifje/craft-inline-editor",
-    "description": "Inline editing for Craft CMS entries on the frontend. Lets admins edit titles, plain text, URL and CKEditor fields directly on the rendered page.",
+    "description": "Inline editing for Craft CMS entries on the frontend. Lets admins edit titles, plain text, URL/Link and CKEditor fields directly on the rendered page.",
     "type": "craft-plugin",
-    "version": "1.7.0",
+    "version": "1.8.0",
     "license": "MIT",
     "keywords": [
         "craft",
@@ -19,11 +19,37 @@
     },
     "require": {
         "php": ">=8.0.2",
-        "craftcms/cms": "^4.0|^5.0"
+        "craftcms/cms": "^4.3.0|^5.0.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.6|^10.5|^11.0|^12.0"
+    },
+    "suggest": {
+        "craftcms/ckeditor": "Enables inline editing of CKEditor fields (3.x on Craft 4; 4.x or 5.x on Craft 5)"
     },
     "autoload": {
         "psr-4": {
             "arifje\\inlineeditor\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "arifje\\inlineeditor\\tests\\": "tests/php/"
+        }
+    },
+    "scripts": {
+        "test": [
+            "@test:php",
+            "@test:js"
+        ],
+        "test:php": "phpunit",
+        "test:js": "node --test tests/js/*.test.js"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "craftcms/plugin-installer": true,
+            "yiisoft/yii2-composer": true
         }
     },
     "extra": {
