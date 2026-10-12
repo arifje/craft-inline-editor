@@ -1,5 +1,11 @@
 # Release Notes for Inline Editor
 
+## 1.8.1 - 2026-10-12
+
+### Fixed
+- CKEditor fields failed to open on Craft 4 (CKEditor plugin 3.x) and on Craft 5 with CKEditor plugin 4.x, i.e. whenever the CDN build is used, with `plugincollection-soft-required {"missingPlugin":"ImageEditing","requiredBy":"LinkImageEditing"}`: the `LinkImage` plugin was loaded for every toolbar containing `link`, but in CKEditor 5 < 44 it can only start together with the image plugins. `LinkImage` is now loaded with the image plugins only (as the control panel does).
+- The frontend now resolves CKEditor "soft" plugin requirements before creating an editor: a required plugin is added when the loaded build provides it, otherwise the affected toolbar items are dropped with a console warning instead of the editor failing to start.
+
 ## 1.8.0 - 2026-09-11
 
 ### Added

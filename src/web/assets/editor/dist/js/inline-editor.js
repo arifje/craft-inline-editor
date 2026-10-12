@@ -143,6 +143,9 @@
     // Plugins that are always loaded, like the control panel does (minus Craft-only ones).
     var CK_ALWAYS_PLUGINS = ['Essentials', 'Paragraph', 'SelectAll', 'Clipboard', 'Autoformat', 'PasteFromOffice', 'GeneralHtmlSupport', 'HtmlComment'];
 
+    // LinkImage lives here, not with the link button: in CKEditor < 44 it only
+    // soft-requires ImageEditing, so loading it without the image plugins throws
+    // plugincollection-soft-required and the editor never starts.
     var CK_IMAGE_PLUGINS = ['Image', 'ImageCaption', 'ImageStyle', 'ImageToolbar', 'LinkImage', 'AutoImage'];
 
     /**
@@ -153,7 +156,7 @@
      */
     var CK_PLUGIN_BUTTON_MAP = [
         { buttons: ['alignment'], plugins: ['Alignment'] },
-        { buttons: ['link'], plugins: ['Link', 'AutoLink', 'LinkImage'] },
+        { buttons: ['link'], plugins: ['Link', 'AutoLink'] },
         { buttons: ['blockQuote'], plugins: ['BlockQuote'] },
         { buttons: ['bold'], plugins: ['Bold'] },
         { buttons: ['bookmark'], plugins: ['Bookmark'] },
@@ -388,6 +391,9 @@
             allow: buildHtmlSupportAllow(cfg.link, customSupport.allow)
         });
 
+        var dropped = resolved.dropped.slice();
+        var pluginNames = resolved.pluginNames.slice();
+
         if (build.kind === 'namespace') {
             var plugins = base.plugins.slice();
             ['plugins', 'extraPlugins'].forEach(function (key) {
@@ -397,11 +403,84 @@
                     });
                 }
             });
-            cfg.plugins = plugins;
+
+            var satisfied = satisfySoftRequirements(plugins, build.ns, buildLabel);
+            if (satisfied.droppedItems.length) {
+                var removeItems = satisfied.droppedItems.map(function (d) { return d.item; });
+                cfg.toolbar.items = cleanSeparators(cfg.toolbar.items.filter(function (item) { return removeItems.indexOf(item) === -1; }));
+                dropped = dropped.concat(satisfied.droppedItems);
+            }
+            warnings = warnings.concat(satisfied.warnings);
+            cfg.plugins = satisfied.plugins;
+            pluginNames = satisfied.plugins.map(function (plugin) { return plugin.pluginName; }).filter(Boolean);
             delete cfg.extraPlugins;
         }
 
-        return { config: cfg, dropped: resolved.dropped, pluginNames: resolved.pluginNames, warnings: warnings };
+        return { config: cfg, dropped: dropped, pluginNames: pluginNames, warnings: warnings };
+    }
+
+    /**
+     * CKEditor plugins may declare "soft" requirements: plugin names (strings)
+     * in `static get requires()` that must be provided by the editor config,
+     * otherwise `create()` throws `plugincollection-soft-required`. Resolve them
+     * up front for namespace builds: add the required plugin from the build when
+     * it exists, otherwise drop the toolbar items whose plugins cannot start.
+     *
+     * Returns { plugins, droppedItems: [{item, reason}], warnings }.
+     */
+    function satisfySoftRequirements(plugins, ns, buildLabel) {
+        var selected = plugins.slice();
+        var droppedItems = [];
+        var warnings = [];
+        var guard = 0;
+
+        function closure(classes) {
+            var seen = [];
+            var soft = [];
+            function visit(cls, origin) {
+                if (seen.indexOf(cls) !== -1) { return; }
+                seen.push(cls);
+                var reqs = Array.isArray(cls.requires) ? cls.requires : [];
+                reqs.forEach(function (req) {
+                    if (typeof req === 'function') { visit(req, origin); }
+                    else if (typeof req === 'string') { soft.push({ name: req, requiredBy: cls.pluginName || '?', origin: origin }); }
+                });
+            }
+            classes.forEach(function (cls) { visit(cls, cls); });
+            return { classes: seen, soft: soft };
+        }
+
+        while (guard++ < 25) {
+            var info = closure(selected);
+            var names = info.classes.map(function (cls) { return cls.pluginName; });
+            var unmet = null;
+            for (var i = 0; i < info.soft.length; i++) {
+                if (names.indexOf(info.soft[i].name) === -1) { unmet = info.soft[i]; break; }
+            }
+            if (!unmet) { break; }
+
+            var candidate = ns[unmet.name];
+            if (typeof candidate === 'function' && candidate.pluginName === unmet.name) {
+                selected.push(candidate);
+                continue;
+            }
+
+            // Cannot be satisfied: remove the top-level plugin that pulled it in.
+            selected = selected.filter(function (cls) { return cls !== unmet.origin; });
+            var originName = unmet.origin.pluginName || '?';
+            var reason = 'its plugin ' + unmet.requiredBy + ' requires ' + unmet.name + ', which the loaded CKEditor build (' + buildLabel + ') does not provide';
+            var groupItems = [];
+            CK_PLUGIN_BUTTON_MAP.forEach(function (group) {
+                if (group.plugins.indexOf(originName) !== -1) { groupItems = groupItems.concat(group.buttons); }
+            });
+            if (groupItems.length) {
+                groupItems.forEach(function (item) { droppedItems.push({ item: item, reason: reason }); });
+            } else {
+                warnings.push('plugin ' + originName + ' was removed because ' + reason);
+            }
+        }
+
+        return { plugins: selected, droppedItems: droppedItems, warnings: warnings };
     }
 
     function lookupFieldConfig(fieldUid, handle) {
@@ -1397,6 +1476,7 @@
             mergeHeadingOptions: mergeHeadingOptions,
             buildCKEditorConfig: buildCKEditorConfig,
             lookupFieldConfig: lookupFieldConfig,
+            satisfySoftRequirements: satisfySoftRequirements,
             cleanSeparators: cleanSeparators,
             buildHtmlSupportAllow: buildHtmlSupportAllow,
             CK_PLUGIN_BUTTON_MAP: CK_PLUGIN_BUTTON_MAP,

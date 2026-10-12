@@ -181,3 +181,69 @@ test('link attributes are kept by General HTML Support, except target/rel when l
     const merged = internal.buildCKEditorConfig({ toolbar: ['link'], options: { htmlSupport: { allow: [{ name: 'span', classes: true }] } } }, build, {});
     assert.deepEqual(merged.config.htmlSupport.allow.map((r) => r.name), ['a', 'span']);
 });
+
+// ── Regression: plugincollection-soft-required (1.8.1) ──────────────────────
+
+function pluginClass(name, requires) {
+    const plugin = function () {};
+    plugin.pluginName = name;
+    if (requires) { Object.defineProperty(plugin, 'requires', { get: () => requires }); }
+    return plugin;
+}
+
+test('link toolbar no longer pulls in LinkImage; image plugins do', () => {
+    const build = fakeNamespaceBuild(ALL_PLUGINS);
+    const linkOnly = internal.resolveToolbar(['heading', '|', 'bold', 'italic', 'link'], build, 'test');
+    assert.ok(linkOnly.pluginNames.includes('Link'));
+    assert.ok(!linkOnly.pluginNames.includes('LinkImage'), 'LinkImage soft-requires ImageEditing in CKEditor < 44');
+
+    const withImages = internal.resolveToolbar(['link', 'insertImage'], build, 'test');
+    assert.ok(withImages.pluginNames.includes('LinkImage'));
+    assert.ok(withImages.pluginNames.includes('Image'));
+});
+
+test('satisfySoftRequirements adds a soft-required plugin when the build provides it', () => {
+    const ImageEditing = pluginClass('ImageEditing');
+    const LinkImageEditing = pluginClass('LinkImageEditing', ['ImageEditing']);
+    const LinkImage = pluginClass('LinkImage', [LinkImageEditing]);
+    const ns = { ImageEditing, LinkImageEditing, LinkImage };
+
+    const result = internal.satisfySoftRequirements([LinkImage], ns, 'test');
+    assert.ok(result.plugins.includes(ImageEditing), 'ImageEditing added from the namespace');
+    assert.deepEqual(result.droppedItems, []);
+    assert.deepEqual(result.warnings, []);
+});
+
+test('satisfySoftRequirements drops the toolbar items whose plugin cannot be satisfied', () => {
+    const StyleEditing = pluginClass('StyleEditing', ['PremiumOnly']);
+    const Style = pluginClass('Style', [StyleEditing]);
+    const Bold = pluginClass('Bold');
+    const ns = { Style, StyleEditing, Bold };
+
+    const result = internal.satisfySoftRequirements([Style, Bold], ns, 'cdn, CKEditor 43.3.1');
+    assert.deepEqual(result.plugins, [Bold]);
+    assert.deepEqual(result.droppedItems.map((d) => d.item), ['style']);
+    assert.match(result.droppedItems[0].reason, /StyleEditing requires PremiumOnly/);
+    assert.match(result.droppedItems[0].reason, /43\.3\.1/);
+});
+
+test('satisfySoftRequirements keeps user plugins but warns when their requirement is unmet', () => {
+    const Custom = pluginClass('MyCustomPlugin', ['Nope']);
+    const result = internal.satisfySoftRequirements([Custom], {}, 'test');
+    assert.deepEqual(result.plugins, []);
+    assert.deepEqual(result.droppedItems, []);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /MyCustomPlugin was removed because its plugin MyCustomPlugin requires Nope/);
+});
+
+test('buildCKEditorConfig removes toolbar items dropped for unmet soft requirements', () => {
+    const build = fakeNamespaceBuild(ALL_PLUGINS.filter((n) => n !== 'GeneralHtmlSupport'));
+    // Make Style depend on GHS (as the real build does); GHS is absent from this fake build.
+    Object.defineProperty(build.ns.Style, 'requires', { get: () => ['GeneralHtmlSupport'] });
+    const result = internal.buildCKEditorConfig({ toolbar: ['bold', '|', 'style', '|', 'italic'], headingLevels: false }, build, { source: 'test' });
+
+    assert.deepEqual(result.config.toolbar.items, ['bold', '|', 'italic']);
+    assert.ok(!result.config.plugins.includes(build.ns.Style));
+    assert.equal(result.dropped.length, 1);
+    assert.equal(result.dropped[0].item, 'style');
+});
