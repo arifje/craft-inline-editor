@@ -2,6 +2,7 @@
 
 namespace arifje\inlineeditor\services;
 
+use arifje\inlineeditor\helpers\AssetSelection;
 use arifje\inlineeditor\helpers\ContentHelper;
 use arifje\inlineeditor\Plugin;
 use Craft;
@@ -28,6 +29,9 @@ class Editor extends Component
     public const TYPE_CKEDITOR = 'ckeditor';
     public const TYPE_TAGS = 'tags';
     public const TYPE_ASSETS = 'assets';
+
+    /** @var ?AssetSelection Selected asset IDs reused across a gallery's wrappers. */
+    private ?AssetSelection $assetSelection = null;
 
     /**
      * Render the wrapper HTML for an editable field.
@@ -529,9 +533,7 @@ class Editor extends Component
                     : [];
 
             case self::TYPE_ASSETS:
-                return is_object($fieldValue) && method_exists($fieldValue, 'ids')
-                    ? array_map('intval', $fieldValue->ids())
-                    : [];
+                return ($this->assetSelection ??= new AssetSelection())->ids($fieldValue);
 
             case self::TYPE_CKEDITOR:
                 return ContentHelper::rawContent($fieldValue);

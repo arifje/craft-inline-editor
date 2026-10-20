@@ -63,6 +63,12 @@ Wherever you would render a field on the front-end, swap the value for the `inli
 
 For anonymous visitors and users who may not edit, the function falls through to a plain, properly HTML-encoded value — no edit icon, no extra markup, no JavaScript loaded. `canInlineEdit()` returns whether the current user may use the inline editor, for templates that need to branch on it.
 
+When an Assets field appears on each image in a gallery, its selected IDs are
+queried once per query object and criteria during the request. All wrappers keep
+the complete ordered selection for replacing/removing individual images. This
+uses no persistent cache; changed query criteria or a new request read the
+selection again. Eager-loaded Craft element collections are also supported.
+
 ### Options
 
 The third argument is a map of options:

@@ -1,5 +1,11 @@
 # Release Notes for Inline Editor
 
+## 1.8.2 - 2026-10-20
+
+### Fixed
+- Reuse the selected asset IDs when rendering multiple inline editors for the same gallery. Large galleries no longer repeat the complete asset-selection query for every image. Results remain local to the request and are refreshed when query criteria change.
+- Accept eager-loaded Craft element collections when reading an Assets field's selected IDs.
+
 ## 1.8.1 - 2026-10-12
 
 ### Fixed
